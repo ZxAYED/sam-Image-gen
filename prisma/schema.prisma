@@ -1,0 +1,50 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+model User {
+  id                      String   @id @default(uuid())
+  email                   String   @unique
+  name                    String?
+  passwordHash            String
+  role                    Role     @default(USER)
+  isVerified              Boolean  @default(false)
+  isBlocked               Boolean  @default(false)
+  isDeleted               Boolean  @default(false)
+  registrationOtp         String?
+  registrationOtpExpireIn DateTime?
+  registrationOtpAttempts Int      @default(0)
+  resetOtp                String?
+  resetOtpExpireIn        DateTime?
+  resetOtpAttempts        Int      @default(0)
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  refreshSessions RefreshSession[]
+}
+
+model RefreshSession {
+  id               String   @id @default(uuid())
+  userId           String
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshTokenHash String
+  revokedAt        DateTime?
+  replacedById     String?
+  deviceId         String?
+  userAgent        String?
+  ip               String?
+  expiresAt        DateTime
+  createdAt        DateTime @default(now())
+
+  @@index([userId])
+  @@index([refreshTokenHash])
+}

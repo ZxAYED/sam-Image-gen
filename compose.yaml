@@ -1,0 +1,39 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: marcus-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: arafat2025/marcus-app:latest
+    platform: linux/amd64
+    container_name: marcus-app
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    # Auto-run migrations on startup
+    command: sh -c "npx prisma migrate deploy && node dist/main.js"
+
+volumes:
+  redis_data:
