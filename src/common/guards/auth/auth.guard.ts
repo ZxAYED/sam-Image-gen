@@ -1,7 +1,6 @@
 import {
   CanActivate,
   ExecutionContext,
-  ForbiddenException,
   Injectable,
   ServiceUnavailableException,
   UnauthorizedException,
@@ -10,7 +9,7 @@ import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
 import { Prisma, User } from '@prisma/client';
 import { Request } from 'express';
-import { IS_PUBLIC_KEY, ROLES_KEY } from 'src/common/decorator/rolesDecorator';
+import { IS_PUBLIC_KEY } from 'src/common/decorator/rolesDecorator';
 import { PrismaService } from 'src/prisma/prisma.service';
 
 @Injectable()
@@ -81,21 +80,6 @@ export class AuthGuard implements CanActivate {
     }
 
     request.user = user;
-
-    const requiredRoles = this.reflector.getAllAndOverride<string[]>(
-      ROLES_KEY,
-      [context.getHandler(), context.getClass()],
-    );
-
-    if (
-      requiredRoles &&
-      requiredRoles.length > 0 &&
-      !requiredRoles.includes(user.role)
-    ) {
-      throw new ForbiddenException(
-        'Access denied , User role does not have permission',
-      );
-    }
 
     return true;
   }

@@ -4,47 +4,309 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
-enum Role {
-  USER
-  ADMIN
+//
+// Enums
+//
+enum Marketplace {
+  AMAZON
+  EBAY
+  SHOPIFY
+  ETSY
+  WALMART
+  OTHER
 }
 
+enum ProjectStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELED
+}
+
+enum ImageSlotType {
+  MAIN_PRODUCT
+  KEY_FACTS
+  LIFESTYLE
+  USP_HIGHLIGHT
+  COMPARISON
+  CROSS_SELLING
+  CLOSING
+}
+
+//
+// User Model (with password and name)
+//
 model User {
-  id                      String   @id @default(uuid())
-  email                   String   @unique
-  name                    String?
-  passwordHash            String
-  role                    Role     @default(USER)
-  isVerified              Boolean  @default(false)
-  isBlocked               Boolean  @default(false)
-  isDeleted               Boolean  @default(false)
-  registrationOtp         String?
-  registrationOtpExpireIn DateTime?
-  registrationOtpAttempts Int      @default(0)
-  resetOtp                String?
-  resetOtpExpireIn        DateTime?
-  resetOtpAttempts        Int      @default(0)
-  createdAt               DateTime @default(now())
-  updatedAt               DateTime @updatedAt
+  id        String   @id @default(uuid()) @db.Uuid
+  email     String   @unique
+  password  String // Added password for user authentication
+  firstName String
+  lastName  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  refreshSessions RefreshSession[]
+  projects Project[]
 }
 
-model RefreshSession {
-  id               String   @id @default(uuid())
-  userId           String
-  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  refreshTokenHash String
-  revokedAt        DateTime?
-  replacedById     String?
-  deviceId         String?
-  userAgent        String?
-  ip               String?
-  expiresAt        DateTime
-  createdAt        DateTime @default(now())
+//
+// Combined Project, Product, and Brand CI Info
+//
+model Project {
+  id      String @id @default(uuid()) @db.Uuid
+  ownerId String @db.Uuid
+  owner   User   @relation(fields: [ownerId], references: [id])
 
-  @@index([userId])
-  @@index([refreshTokenHash])
+  name              String
+  brandName         String
+  productCategory   String
+  targetMarketplace Marketplace @default(OTHER)
+
+  status ProjectStatus @default(DRAFT)
+
+  // Brand and Product Information
+  mainImage String?
+
+  // Brand Info
+  brandLogoAssetId String? @db.Uuid
+  brandLogo        Asset?  @relation("BrandLogo", fields: [brandLogoAssetId], references: [id])
+
+  // Product Info
+  sku              String?
+  shortDescription String?
+
+  // Font Information for the Brand
+  brandFontHeading    String @default("Montserrat")
+  brandFontSubheading String @default("Open Sans")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Image Generation (1-7 Image Slots)
+  image1 Image1[]
+  image2 Image2[]
+  image3 Image3[]
+  image4 Image4[]
+  image5 Image5[]
+  image6 Image6[]
+  image7 Image7[]
+
+  // Project Stats (indexed for faster access in the dashboard)
+  imagesCreated     Int @default(0)
+  productsOptimized Int @default(0)
+
+  // Add relation to ProjectStats model
+  projectStats ProjectStats?
+
+  @@index([name]) // Index for search by project name
+  @@index([brandName]) // Index for search by brand name
+  @@index([productCategory]) // Index for filtering by category
+  @@index([status]) // Index for filtering by status
+}
+
+//
+// Asset for storing images (e.g., product images, brand logo, generated images)
+//
+model Asset {
+  id String @id @default(uuid()) @db.Uuid
+
+  type       String
+  mimeType   String?
+  fileName   String?
+  sizeBytes  Int?
+  storageKey String  @unique
+  publicUrl  String?
+
+  createdAt DateTime @default(now())
+
+  // Relation to lifestyle image
+  lifestyleImage Image3[] @relation("LifestyleImages")
+
+  // Relation to brand logo
+  brandLogo Project[] @relation("BrandLogo")
+}
+
+//
+// Image Generation Tables (1-7) with Idempotent Generation ID and Refine Prompts
+
+// Table for Image 1 - Main Product Image
+model Image1 {
+  id        String  @id @default(uuid()) @db.Uuid
+  projectId String  @db.Uuid
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  versionNumber   Int       @default(1)
+  refinePrompt    String?
+  generatedPrompt String
+  status          JobStatus @default(QUEUED)
+
+  // Hardcoded requirements for Image 1
+  requirement String @default("Pure white background (FFFFFF), Product centered and fits 85% of frame, No text or additional graphics, High resolution (minimum 1000px)")
+
+  imageUrl     String
+  generationId String   @unique // Ensure each generation request is unique (Idempotent)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// Table for Image 2 - Key Facts Image
+model Image2 {
+  id        String  @id @default(uuid()) @db.Uuid
+  projectId String  @db.Uuid
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  versionNumber   Int       @default(1)
+  refinePrompt    String?
+  generatedPrompt String
+  status          JobStatus @default(QUEUED)
+
+  backgroundStyle   String?
+  brandLogoPosition String?
+  keyFact1          String?
+  keyFact2          String?
+  keyFact3          String?
+  keyFact4          String?
+
+  imageUrl     String
+  generationId String   @unique
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// Table for Image 3 - Lifestyle Image
+model Image3 {
+  id        String  @id @default(uuid()) @db.Uuid
+  projectId String  @db.Uuid
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  versionNumber   Int       @default(1)
+  refinePrompt    String?
+  generatedPrompt String
+  status          JobStatus @default(QUEUED)
+
+  lifestyleImageAssetId    String? @db.Uuid
+  lifestyleImage           Asset?  @relation("LifestyleImages", fields: [lifestyleImageAssetId], references: [id])
+  usageScenarioDescription String?
+
+  // New fields for lifestyle images
+  lifestyleProviderImage  String?
+  lifestyleGeneratedImage String?
+
+  imageUrl     String
+  generationId String   @unique
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// Table for Image 4 - USP Highlight Image
+model Image4 {
+  id        String  @id @default(uuid()) @db.Uuid
+  projectId String  @db.Uuid
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  versionNumber   Int       @default(1)
+  refinePrompt    String?
+  generatedPrompt String
+  status          JobStatus @default(QUEUED)
+
+  uspHighlight1 String?
+  uspHighlight2 String?
+  uspHighlight3 String?
+  uspHighlight4 String?
+
+  imageUrl     String
+  generationId String   @unique
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// Table for Image 5 - Comparison Image
+model Image5 {
+  id        String  @id @default(uuid()) @db.Uuid
+  projectId String  @db.Uuid
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  versionNumber   Int       @default(1)
+  refinePrompt    String?
+  generatedPrompt String
+  status          JobStatus @default(QUEUED)
+
+  comparisonAdv1 String?
+  comparisonAdv2 String?
+  comparisonAdv3 String?
+  comparisonLim1 String?
+  comparisonLim2 String?
+  comparisonLim3 String?
+
+  imageUrl     String
+  generationId String   @unique
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// Table for Image 6 - Cross-Selling Image
+model Image6 {
+  id        String  @id @default(uuid()) @db.Uuid
+  projectId String  @db.Uuid
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  versionNumber   Int       @default(1)
+  refinePrompt    String?
+  generatedPrompt String
+  status          JobStatus @default(QUEUED)
+
+  crossSellProduct1 String? // Now of type `Asset` to handle cross-sell product images
+  crossSellProduct2 String? // Cross-selling images will be assets
+  crossSellProduct3 String?
+  crossSellProduct4 String?
+  crossSellProduct5 String?
+  crossSellProduct6 String?
+
+  imageUrl     String
+  generationId String   @unique
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// Table for Image 7 - Closing Image
+model Image7 {
+  id        String  @id @default(uuid()) @db.Uuid
+  projectId String  @db.Uuid
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  versionNumber   Int       @default(1)
+  refinePrompt    String?
+  generatedPrompt String
+  status          JobStatus @default(QUEUED)
+
+  emotionDirection String? // Emotion/inspiration/brand story field
+  customHeadline   String? // Custom headline for image 7
+
+  imageUrl     String
+  generationId String   @unique
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+//
+// Project Stats (to show counts of images created, products optimized, etc.)
+//
+model ProjectStats {
+  projectId String  @id @db.Uuid
+  project   Project @relation(fields: [projectId], references: [id])
+
+  imagesCreated     Int @default(0)
+  productsOptimized Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
