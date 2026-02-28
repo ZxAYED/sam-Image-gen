@@ -81,6 +81,34 @@ type RefineImage5Input = {
   limitations: string[];
 };
 
+type GenerateImage6Input = {
+  projectContext: Record<string, unknown>;
+  style?: string;
+  productNames: string[];
+};
+
+type RefineImage6Input = {
+  projectContext: Record<string, unknown>;
+  style?: string;
+  feedback: string;
+  productNames: string[];
+};
+
+type GenerateImage7Input = {
+  projectContext: Record<string, unknown>;
+  style?: string;
+  direction: string;
+  headline: string;
+};
+
+type RefineImage7Input = {
+  projectContext: Record<string, unknown>;
+  style?: string;
+  feedback: string;
+  direction: string;
+  headline: string;
+};
+
 type GenerateImageResult = {
   imageUrl?: string;
   imageBuffer?: Buffer;
@@ -449,6 +477,62 @@ export class AiService {
       feedback: input.feedback,
       advantages: input.advantages,
       limitations: input.limitations,
+    });
+  }
+
+  async generateImage6(
+    input: GenerateImage6Input,
+  ): Promise<GenerateImageResult> {
+    const path =
+      this.config.get<string>('AI_IMAGE6_GENERATE_PATH') ??
+      '/api/step4/generate/cross-selling';
+
+    return this.requestImageGeneration(path, {
+      project_context: input.projectContext,
+      style_template: input.style ?? null,
+      product_names: input.productNames,
+    });
+  }
+
+  async refineImage6(input: RefineImage6Input): Promise<GenerateImageResult> {
+    const path =
+      this.config.get<string>('AI_IMAGE6_REFINE_PATH') ??
+      '/api/step4/refine/cross-selling';
+
+    return this.requestImageGeneration(path, {
+      project_context: input.projectContext,
+      style_template: input.style ?? null,
+      feedback: input.feedback,
+      product_names: input.productNames,
+    });
+  }
+
+  async generateImage7(
+    input: GenerateImage7Input,
+  ): Promise<GenerateImageResult> {
+    const path =
+      this.config.get<string>('AI_IMAGE7_GENERATE_PATH') ??
+      '/api/step4/generate/closing';
+
+    return this.requestImageGeneration(path, {
+      project_context: input.projectContext,
+      style_template: input.style ?? null,
+      direction: input.direction,
+      headline: input.headline,
+    });
+  }
+
+  async refineImage7(input: RefineImage7Input): Promise<GenerateImageResult> {
+    const path =
+      this.config.get<string>('AI_IMAGE7_REFINE_PATH') ??
+      '/api/step4/refine/closing';
+
+    return this.requestImageGeneration(path, {
+      project_context: input.projectContext,
+      style_template: input.style ?? null,
+      feedback: input.feedback,
+      direction: input.direction,
+      headline: input.headline,
     });
   }
 }

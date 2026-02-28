@@ -24,6 +24,8 @@ import { CreateImage2Dto } from './dto/create-image2.dto';
 import { CreateImage3Dto } from './dto/create-image3.dto';
 import { CreateImage4Dto } from './dto/create-image4.dto';
 import { CreateImage5Dto } from './dto/create-image5.dto';
+import { CreateImage6Dto } from './dto/create-image6.dto';
+import { CreateImage7Dto } from './dto/create-image7.dto';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { ImageRequestMode } from './dto/image-request-mode.enum';
 import { ProjectsService } from './projects.service';
@@ -309,5 +311,132 @@ export class ProjectsController {
     }
 
     return this.projects.createImage5ForProject(ownerId, dto);
+  }
+
+  @Roles(Role.USER as string)
+  @Post('gen-image6')
+  @ApiConsumes('application/json')
+  @ApiOperation({
+    summary: 'Generate or refine Image 6 (Cross-Selling)',
+    description:
+      'JSON endpoint for Image 6. GENERATION uses projectId + productNames; REFINE uses projectId + imageId + feedback + productNames.',
+  })
+  @ApiBody({
+    schema: {
+      oneOf: [
+        {
+          type: 'object',
+          required: ['idempotencyKey', 'mode', 'projectId', 'productNames'],
+          properties: {
+            idempotencyKey: { type: 'string' },
+            mode: { type: 'string', enum: ['GENERATION'] },
+            projectId: { type: 'string', format: 'uuid' },
+            style: { type: 'string' },
+            productNames: {
+              type: 'array',
+              minItems: 1,
+              maxItems: 6,
+              items: { type: 'string' },
+            },
+          },
+        },
+        {
+          type: 'object',
+          required: [
+            'idempotencyKey',
+            'mode',
+            'projectId',
+            'imageId',
+            'feedback',
+            'productNames',
+          ],
+          properties: {
+            idempotencyKey: { type: 'string' },
+            projectId: { type: 'string', format: 'uuid' },
+            imageId: { type: 'string', format: 'uuid' },
+            mode: { type: 'string', enum: ['REFINE'] },
+            style: { type: 'string' },
+            feedback: { type: 'string' },
+            productNames: {
+              type: 'array',
+              minItems: 1,
+              maxItems: 6,
+              items: { type: 'string' },
+            },
+          },
+        },
+      ],
+    },
+  })
+  createImage6(@Req() req: { user?: User }, @Body() dto: CreateImage6Dto) {
+    const ownerId = req.user?.id;
+    if (!ownerId) {
+      throw new UnauthorizedException('Unauthorized');
+    }
+
+    return this.projects.createImage6ForProject(ownerId, dto);
+  }
+
+  @Roles(Role.USER as string)
+  @Post('gen-image7')
+  @ApiConsumes('application/json')
+  @ApiOperation({
+    summary: 'Generate or refine Image 7 (Closing)',
+    description:
+      'JSON endpoint for Image 7. GENERATION uses projectId + direction + headline; REFINE uses projectId + imageId + feedback + direction + headline.',
+  })
+  @ApiBody({
+    schema: {
+      oneOf: [
+        {
+          type: 'object',
+          required: [
+            'idempotencyKey',
+            'mode',
+            'projectId',
+            'direction',
+            'headline',
+          ],
+          properties: {
+            idempotencyKey: { type: 'string' },
+            mode: { type: 'string', enum: ['GENERATION'] },
+            projectId: { type: 'string', format: 'uuid' },
+            style: { type: 'string' },
+            direction: { type: 'string' },
+            headline: { type: 'string' },
+          },
+        },
+        {
+          type: 'object',
+          required: [
+            'idempotencyKey',
+            'mode',
+            'projectId',
+            'imageId',
+            'feedback',
+            'direction',
+            'headline',
+          ],
+          properties: {
+            idempotencyKey: { type: 'string' },
+            projectId: { type: 'string', format: 'uuid' },
+            imageId: { type: 'string', format: 'uuid' },
+            mode: { type: 'string', enum: ['REFINE'] },
+            style: { type: 'string' },
+            feedback: { type: 'string' },
+            direction: { type: 'string' },
+            headline: { type: 'string' },
+          },
+        },
+      ],
+    },
+  })
+  createImage7(@Req() req: { user?: User }, @Body() dto: CreateImage7Dto) {
+    const ownerId = req.user?.id;
+    if (!ownerId) {
+      throw new UnauthorizedException('Unauthorized');
+    }
+
+    return this.projects.createImage7ForProject(ownerId, dto);
   }
 }
