@@ -1,4 +1,3 @@
-import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   ArrayMaxSize,
@@ -9,10 +8,8 @@ import {
   IsString,
   IsUUID,
   MaxLength,
-  ValidateNested,
 } from 'class-validator';
 import { ImageRequestMode } from './image-request-mode.enum';
-import { ProjectContextDto } from './project-context.dto';
 
 export class CreateImage4Dto {
   @ApiProperty({
@@ -26,12 +23,20 @@ export class CreateImage4Dto {
   @ApiPropertyOptional({
     format: 'uuid',
     example: 'f0c02bd3-e90f-4fdc-9f3f-13f4cc4a1f58',
-    description:
-      'Optional legacy project ID. Preferred source is projectContext.id.',
+    description: 'Project ID (required for GENERATION)',
   })
   @IsOptional()
   @IsUUID()
   projectId?: string;
+
+  @ApiPropertyOptional({
+    format: 'uuid',
+    example: '993035a4-52f4-46fe-a7a9-9a3c3cf0f3f0',
+    description: 'Image 4 row ID (required for REFINE)',
+  })
+  @IsOptional()
+  @IsUUID()
+  imageId?: string;
 
   @ApiPropertyOptional({
     enum: ImageRequestMode,
@@ -72,14 +77,4 @@ export class CreateImage4Dto {
   @IsString()
   @MaxLength(2000)
   feedback?: string;
-
-  @ApiPropertyOptional({
-    type: () => ProjectContextDto,
-    description:
-      'Project context object for AI payload. Include `id` in both GENERATION and REFINE.',
-  })
-  @IsOptional()
-  @ValidateNested()
-  @Type(() => ProjectContextDto)
-  projectContext?: ProjectContextDto;
 }

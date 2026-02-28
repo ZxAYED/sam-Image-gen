@@ -67,15 +67,10 @@ export class ProjectsImageService {
     file?: UploadedFile,
   ) {
     // Step 1: Validate generation input
-    const projectId =
-      typeof dto.projectContext?.id === 'string'
-        ? dto.projectContext.id
-        : dto.projectId;
-    if (!projectId) {
-      throw new BadRequestException(
-        'projectContext.id is required for generation',
-      );
+    if (!dto.projectId) {
+      throw new BadRequestException('projectId is required for generation');
     }
+    const projectId = dto.projectId;
     if (!file) {
       throw new BadRequestException('Image file is required for generation');
     }
@@ -229,30 +224,19 @@ export class ProjectsImageService {
   }
 
   private async refineImage1(ownerId: string, dto: CreateImage1Dto) {
-    // Step 1: Validate refine input (projectContext + feedback + previous image URL)
-    const projectContext = dto.projectContext;
-    const projectId =
-      projectContext && typeof projectContext.id === 'string'
-        ? projectContext.id
-        : null;
-
-    if (!projectContext || !projectId) {
-      throw new BadRequestException(
-        'projectContext with string `id` is required for refine',
-      );
+    // Step 1: Validate refine input (projectId + imageId + feedback)
+    if (!dto.projectId) {
+      throw new BadRequestException('projectId is required for refine mode');
     }
-    const projectContextPayload = projectContext as unknown as Record<
-      string,
-      unknown
-    >;
+    if (!dto.imageId) {
+      throw new BadRequestException('imageId is required for refine mode');
+    }
     if (!dto.feedback?.trim()) {
       throw new BadRequestException('feedback is required for refine mode');
     }
-    if (!dto.imageUrl?.trim()) {
-      throw new BadRequestException(
-        'imageUrl is required for refine mode (previous generated image URL)',
-      );
-    }
+    const projectId = dto.projectId;
+    const imageId = dto.imageId;
+
     const key = this.imageShared.requireIdempotencyKey(dto.idempotencyKey);
     const idempotency = this.imageShared.buildGenerationId(
       'image1',
@@ -260,10 +244,10 @@ export class ProjectsImageService {
       key,
       {
         ownerId,
-        projectContext: projectContextPayload,
+        projectId,
+        imageId,
         style: dto.style ?? null,
         feedback: dto.feedback,
-        imageUrl: dto.imageUrl,
       },
     );
 
@@ -288,21 +272,42 @@ export class ProjectsImageService {
       idempotency.generationId,
     );
 
-    // Step 2: Verify project ownership
+    // Step 2: Verify project ownership and fetch DB context
     const project = await this.prisma.project.findFirst({
       where: { id: projectId, ownerId },
-      select: { id: true },
+      select: {
+        id: true,
+        name: true,
+        brandName: true,
+        productCategory: true,
+        targetMarketplace: true,
+        status: true,
+        mainImage: true,
+        sku: true,
+        shortDescription: true,
+        brandFontHeading: true,
+        brandFontSubheading: true,
+      },
     });
     if (!project) {
       throw new NotFoundException('Project not found');
     }
 
-    // Step 3: Call Image1 refine API
+    const image1Source = await this.prisma.image1.findFirst({
+      where: { id: imageId, projectId },
+      select: { id: true, imageUrl: true },
+    });
+    if (!image1Source) {
+      throw new NotFoundException('Image 1 not found');
+    }
+    const projectContextPayload = project as unknown as Record<string, unknown>;
+
+    // Step 3: Call Image1 refine API with DB context + source image URL
     const aiResult = await this.ai.refineImage1({
       projectContext: projectContextPayload,
       style: dto.style,
       feedback: dto.feedback,
-      imageUrl: dto.imageUrl,
+      imageUrl: image1Source.imageUrl,
     });
 
     // Step 4: Resolve generated output URL
@@ -349,7 +354,7 @@ export class ProjectsImageService {
             generatedPrompt: aiResult.prompt,
             refinePrompt: aiResult.refinePrompt ?? dto.feedback,
             imageUrl: generatedImageUrl,
-            sourceImageUrl: dto.imageUrl,
+            sourceImageUrl: image1Source.imageUrl,
             generationId: idempotency.generationId,
             status: JobStatus.SUCCEEDED,
           },
@@ -385,15 +390,10 @@ export class ProjectsImageService {
 
   private async generateImage2(ownerId: string, dto: CreateImage2Dto) {
     // Step 1: Validate generation input
-    const projectId =
-      typeof dto.projectContext?.id === 'string'
-        ? dto.projectContext.id
-        : dto.projectId;
-    if (!projectId) {
-      throw new BadRequestException(
-        'projectContext.id is required for generation',
-      );
+    if (!dto.projectId) {
+      throw new BadRequestException('projectId is required for generation');
     }
+    const projectId = dto.projectId;
     const key = this.imageShared.requireIdempotencyKey(dto.idempotencyKey);
 
     const keyFacts = [dto.keyFact1, dto.keyFact2, dto.keyFact3, dto.keyFact4];
@@ -550,22 +550,15 @@ export class ProjectsImageService {
   }
 
   private async refineImage2(ownerId: string, dto: CreateImage2Dto) {
-    // Step 1: Validate refine input (projectContext + feedback + key facts)
-    const projectContext = dto.projectContext;
-    const projectId =
-      projectContext && typeof projectContext.id === 'string'
-        ? projectContext.id
-        : null;
-
-    if (!projectContext || !projectId) {
-      throw new BadRequestException(
-        'projectContext with string `id` is required for refine',
-      );
+    // Step 1: Validate refine input (projectId + imageId + feedback + key facts)
+    if (!dto.projectId) {
+      throw new BadRequestException('projectId is required for refine mode');
     }
-    const projectContextPayload = projectContext as unknown as Record<
-      string,
-      unknown
-    >;
+    if (!dto.imageId) {
+      throw new BadRequestException('imageId is required for refine mode');
+    }
+    const projectId = dto.projectId;
+    const imageId = dto.imageId;
 
     const keyFacts = [dto.keyFact1, dto.keyFact2, dto.keyFact3, dto.keyFact4];
     const key = this.imageShared.requireIdempotencyKey(dto.idempotencyKey);
@@ -579,13 +572,13 @@ export class ProjectsImageService {
       key,
       {
         ownerId,
-        projectContext: projectContextPayload,
+        projectId,
+        imageId,
         style: dto.style ?? null,
         feedback: dto.feedback,
         keyFacts,
         backgroundStyle: dto.backgroundStyle ?? null,
         logoPosition: dto.logoPosition ?? null,
-        imageUrl: dto.imageUrl ?? null,
       },
     );
 
@@ -610,16 +603,37 @@ export class ProjectsImageService {
       idempotency.generationId,
     );
 
-    // Step 2: Verify project ownership
+    // Step 2: Verify project ownership and fetch DB context
     const project = await this.prisma.project.findFirst({
       where: { id: projectId, ownerId },
-      select: { id: true },
+      select: {
+        id: true,
+        name: true,
+        brandName: true,
+        productCategory: true,
+        targetMarketplace: true,
+        status: true,
+        mainImage: true,
+        sku: true,
+        shortDescription: true,
+        brandFontHeading: true,
+        brandFontSubheading: true,
+      },
     });
     if (!project) {
       throw new NotFoundException('Project not found');
     }
 
-    // Step 3: Call Image2 refine API
+    const image2Source = await this.prisma.image2.findFirst({
+      where: { id: imageId, projectId },
+      select: { id: true, imageUrl: true },
+    });
+    if (!image2Source) {
+      throw new NotFoundException('Image 2 not found');
+    }
+    const projectContextPayload = project as unknown as Record<string, unknown>;
+
+    // Step 3: Call Image2 refine API with DB context + source image URL
     const aiResult = await this.ai.refineImage2({
       projectContext: projectContextPayload,
       style: dto.style,
@@ -627,7 +641,7 @@ export class ProjectsImageService {
       keyFacts,
       backgroundStyle: dto.backgroundStyle,
       logoPosition: dto.logoPosition,
-      imageUrl: dto.imageUrl,
+      imageUrl: image2Source.imageUrl,
     });
 
     // Step 4: Resolve generated output URL
@@ -719,15 +733,10 @@ export class ProjectsImageService {
     file?: UploadedFile,
   ) {
     // Step 1: Validate generation input
-    const projectId =
-      typeof dto.projectContext?.id === 'string'
-        ? dto.projectContext.id
-        : dto.projectId;
-    if (!projectId) {
-      throw new BadRequestException(
-        'projectContext.id is required for generation',
-      );
+    if (!dto.projectId) {
+      throw new BadRequestException('projectId is required for generation');
     }
+    const projectId = dto.projectId;
     if (!file) {
       throw new BadRequestException(
         'Lifestyle image file is required for generation',
@@ -884,30 +893,19 @@ export class ProjectsImageService {
   }
 
   private async refineImage3(ownerId: string, dto: CreateImage3Dto) {
-    // Step 1: Validate refine input (projectContext + feedback + ref image url)
-    const projectContext = dto.projectContext;
-    const projectId =
-      projectContext && typeof projectContext.id === 'string'
-        ? projectContext.id
-        : null;
-
-    if (!projectContext || !projectId) {
-      throw new BadRequestException(
-        'projectContext with string `id` is required for refine',
-      );
+    // Step 1: Validate refine input (projectId + imageId + feedback)
+    if (!dto.projectId) {
+      throw new BadRequestException('projectId is required for refine mode');
     }
-    const projectContextPayload = projectContext as unknown as Record<
-      string,
-      unknown
-    >;
+    if (!dto.imageId) {
+      throw new BadRequestException('imageId is required for refine mode');
+    }
     if (!dto.feedback?.trim()) {
       throw new BadRequestException('feedback is required for refine mode');
     }
-    if (!dto.refImageUrl?.trim()) {
-      throw new BadRequestException(
-        'refImageUrl is required for refine mode (previous image URL)',
-      );
-    }
+    const projectId = dto.projectId;
+    const imageId = dto.imageId;
+
     const key = this.imageShared.requireIdempotencyKey(dto.idempotencyKey);
     const idempotency = this.imageShared.buildGenerationId(
       'image3',
@@ -915,11 +913,11 @@ export class ProjectsImageService {
       key,
       {
         ownerId,
-        projectContext: projectContextPayload,
+        projectId,
+        imageId,
         style: dto.style ?? null,
         feedback: dto.feedback,
         scenario: dto.scenario ?? null,
-        refImageUrl: dto.refImageUrl,
       },
     );
 
@@ -944,22 +942,55 @@ export class ProjectsImageService {
       idempotency.generationId,
     );
 
-    // Step 2: Verify project ownership
+    // Step 2: Verify project ownership and fetch DB context
     const project = await this.prisma.project.findFirst({
       where: { id: projectId, ownerId },
-      select: { id: true },
+      select: {
+        id: true,
+        name: true,
+        brandName: true,
+        productCategory: true,
+        targetMarketplace: true,
+        status: true,
+        mainImage: true,
+        sku: true,
+        shortDescription: true,
+        brandFontHeading: true,
+        brandFontSubheading: true,
+      },
     });
     if (!project) {
       throw new NotFoundException('Project not found');
     }
 
-    // Step 3: Call Image3 refine API
+    const image3Source = await this.prisma.image3.findFirst({
+      where: { id: imageId, projectId },
+      select: {
+        id: true,
+        imageUrl: true,
+        lifestyleGeneratedImage: true,
+        lifestyleProviderImage: true,
+      },
+    });
+    if (!image3Source) {
+      throw new NotFoundException('Image 3 not found');
+    }
+    const sourceRefImageUrl =
+      image3Source.imageUrl ||
+      image3Source.lifestyleGeneratedImage ||
+      image3Source.lifestyleProviderImage;
+    if (!sourceRefImageUrl) {
+      throw new BadRequestException('Source image URL not found for Image 3');
+    }
+    const projectContextPayload = project as unknown as Record<string, unknown>;
+
+    // Step 3: Call Image3 refine API with DB context + source image URL
     const aiResult = await this.ai.refineImage3({
       projectContext: projectContextPayload,
       style: dto.style,
       feedback: dto.feedback,
       scenario: dto.scenario,
-      refImageUrl: dto.refImageUrl,
+      refImageUrl: sourceRefImageUrl,
     });
 
     // Step 4: Resolve generated output URL
@@ -1009,7 +1040,7 @@ export class ProjectsImageService {
             generationId: idempotency.generationId,
             status: JobStatus.SUCCEEDED,
             usageScenarioDescription: dto.scenario ?? null,
-            lifestyleProviderImage: dto.refImageUrl,
+            lifestyleProviderImage: sourceRefImageUrl,
             lifestyleGeneratedImage: generatedImageUrl,
           },
         });

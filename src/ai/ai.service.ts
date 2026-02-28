@@ -66,6 +66,21 @@ type RefineImage4Input = {
   usps: string[];
 };
 
+type GenerateImage5Input = {
+  projectContext: Record<string, unknown>;
+  style?: string;
+  advantages: string[];
+  limitations: string[];
+};
+
+type RefineImage5Input = {
+  projectContext: Record<string, unknown>;
+  style?: string;
+  feedback: string;
+  advantages: string[];
+  limitations: string[];
+};
+
 type GenerateImageResult = {
   imageUrl?: string;
   imageBuffer?: Buffer;
@@ -405,6 +420,35 @@ export class AiService {
       style_template: input.style ?? null,
       feedback: input.feedback,
       usps: input.usps,
+    });
+  }
+
+  async generateImage5(
+    input: GenerateImage5Input,
+  ): Promise<GenerateImageResult> {
+    const path =
+      this.config.get<string>('AI_IMAGE5_GENERATE_PATH') ??
+      '/api/step4/generate/comparison';
+
+    return this.requestImageGeneration(path, {
+      project_context: input.projectContext,
+      style_template: input.style ?? null,
+      advantages: input.advantages,
+      limitations: input.limitations,
+    });
+  }
+
+  async refineImage5(input: RefineImage5Input): Promise<GenerateImageResult> {
+    const path =
+      this.config.get<string>('AI_IMAGE5_REFINE_PATH') ??
+      '/api/step4/refine/comparison';
+
+    return this.requestImageGeneration(path, {
+      project_context: input.projectContext,
+      style_template: input.style ?? null,
+      feedback: input.feedback,
+      advantages: input.advantages,
+      limitations: input.limitations,
     });
   }
 }

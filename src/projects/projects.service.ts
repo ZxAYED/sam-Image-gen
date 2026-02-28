@@ -6,6 +6,7 @@ import { CreateImage1Dto } from './dto/create-image1.dto';
 import { CreateImage2Dto } from './dto/create-image2.dto';
 import { CreateImage3Dto } from './dto/create-image3.dto';
 import { CreateImage4Dto } from './dto/create-image4.dto';
+import { CreateImage5Dto } from './dto/create-image5.dto';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { ProjectsImageService } from './projects-image-1to3.service';
 import { ProjectsImage4To7Service } from './projects-image-4to7.service';
@@ -60,5 +61,9 @@ export class ProjectsService {
 
   async createImage4ForProject(ownerId: string, dto: CreateImage4Dto) {
     return this.images4To7.createImage4ForProject(ownerId, dto);
+  }
+
+  async createImage5ForProject(ownerId: string, dto: CreateImage5Dto) {
+    return this.images4To7.createImage5ForProject(ownerId, dto);
   }
 }

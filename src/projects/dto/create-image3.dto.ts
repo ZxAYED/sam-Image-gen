@@ -1,16 +1,12 @@
-import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsEnum,
   IsOptional,
   IsString,
-  IsUrl,
   IsUUID,
   MaxLength,
-  ValidateNested,
 } from 'class-validator';
 import { ImageRequestMode } from './image-request-mode.enum';
-import { ProjectContextDto } from './project-context.dto';
 
 export class CreateImage3Dto {
   @ApiProperty({
@@ -29,6 +25,15 @@ export class CreateImage3Dto {
   @IsOptional()
   @IsUUID()
   projectId?: string;
+
+  @ApiPropertyOptional({
+    format: 'uuid',
+    example: '3f3f3a43-bdf2-4d08-94f7-c82e2de5fdc9',
+    description: 'Image 3 row ID (required for REFINE)',
+  })
+  @IsOptional()
+  @IsUUID()
+  imageId?: string;
 
   @ApiPropertyOptional({
     enum: ImageRequestMode,
@@ -66,24 +71,4 @@ export class CreateImage3Dto {
   @IsString()
   @MaxLength(2000)
   feedback?: string;
-
-  @ApiPropertyOptional({
-    example:
-      'https://sam-app-storage-eu.s3.eu-central-1.amazonaws.com/projects/lifestyle-refs/sample.png',
-    description:
-      'Reference image URL. Required for REFINE mode; GENERATION gets this from uploaded file.',
-  })
-  @IsOptional()
-  @IsUrl()
-  refImageUrl?: string;
-
-  @ApiPropertyOptional({
-    type: () => ProjectContextDto,
-    description:
-      'Project context object used for REFINE payload to AI. Should include project id as `id`.',
-  })
-  @IsOptional()
-  @ValidateNested()
-  @Type(() => ProjectContextDto)
-  projectContext?: ProjectContextDto;
 }

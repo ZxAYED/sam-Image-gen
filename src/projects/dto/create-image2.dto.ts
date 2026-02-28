@@ -3,14 +3,10 @@ import {
   IsEnum,
   IsOptional,
   IsString,
-  IsUrl,
   IsUUID,
   MaxLength,
-  ValidateNested,
 } from 'class-validator';
-import { Type } from 'class-transformer';
 import { ImageRequestMode } from './image-request-mode.enum';
-import { ProjectContextDto } from './project-context.dto';
 
 export class CreateImage2Dto {
   @ApiProperty({
@@ -24,12 +20,20 @@ export class CreateImage2Dto {
   @ApiPropertyOptional({
     format: 'uuid',
     example: 'f0c02bd3-e90f-4fdc-9f3f-13f4cc4a1f58',
-    description:
-      'Project ID (required for GENERATION, optional for REFINE if projectContext.id is provided)',
+    description: 'Project ID (required for GENERATION and REFINE)',
   })
   @IsOptional()
   @IsUUID()
   projectId?: string;
+
+  @ApiPropertyOptional({
+    format: 'uuid',
+    example: 'c450d9ea-c0bb-4af9-a402-e715fc7879cb',
+    description: 'Image 2 row ID (required for REFINE)',
+  })
+  @IsOptional()
+  @IsUUID()
+  imageId?: string;
 
   @ApiPropertyOptional({
     enum: ImageRequestMode,
@@ -96,24 +100,4 @@ export class CreateImage2Dto {
   @IsString()
   @MaxLength(2000)
   feedback?: string;
-
-  @ApiPropertyOptional({
-    example:
-      'https://sam-app-storage-eu.s3.eu-central-1.amazonaws.com/projects/generated/image2/sample.png',
-    description:
-      'Optional previous generated image URL for refine (not required by AI screenshot, but supported)',
-  })
-  @IsOptional()
-  @IsUrl()
-  imageUrl?: string;
-
-  @ApiPropertyOptional({
-    type: () => ProjectContextDto,
-    description:
-      'Project context object used for REFINE payload to AI. Should include project id as `id`.',
-  })
-  @IsOptional()
-  @ValidateNested()
-  @Type(() => ProjectContextDto)
-  projectContext?: ProjectContextDto;
 }
