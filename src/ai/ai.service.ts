@@ -53,6 +53,19 @@ type RefineImage3Input = {
   refImageUrl: string;
 };
 
+type GenerateImage4Input = {
+  projectContext: Record<string, unknown>;
+  style?: string;
+  usps: string[];
+};
+
+type RefineImage4Input = {
+  projectContext: Record<string, unknown>;
+  style?: string;
+  feedback: string;
+  usps: string[];
+};
+
 type GenerateImageResult = {
   imageUrl?: string;
   imageBuffer?: Buffer;
@@ -347,8 +360,6 @@ export class AiService {
       '/api/step4/generate/lifestyle';
 
     return this.requestImageGeneration(path, {
-      project_id:
-        typeof input.project.id === 'string' ? input.project.id : null,
       project_context: input.project,
       style_template: input.style ?? null,
       scenario: input.scenario ?? null,
@@ -362,15 +373,38 @@ export class AiService {
       '/api/step4/refine/lifestyle';
 
     return this.requestImageGeneration(path, {
-      project_id:
-        typeof input.projectContext.id === 'string'
-          ? input.projectContext.id
-          : null,
       project_context: input.projectContext,
       style_template: input.style ?? null,
       feedback: input.feedback,
       scenario: input.scenario ?? null,
       ref_image_url: input.refImageUrl,
+    });
+  }
+
+  async generateImage4(
+    input: GenerateImage4Input,
+  ): Promise<GenerateImageResult> {
+    const path =
+      this.config.get<string>('AI_IMAGE4_GENERATE_PATH') ??
+      '/api/step4/generate/usps';
+
+    return this.requestImageGeneration(path, {
+      project_context: input.projectContext,
+      style_template: input.style ?? null,
+      usps: input.usps,
+    });
+  }
+
+  async refineImage4(input: RefineImage4Input): Promise<GenerateImageResult> {
+    const path =
+      this.config.get<string>('AI_IMAGE4_REFINE_PATH') ??
+      '/api/step4/refine/usps';
+
+    return this.requestImageGeneration(path, {
+      project_context: input.projectContext,
+      style_template: input.style ?? null,
+      feedback: input.feedback,
+      usps: input.usps,
     });
   }
 }

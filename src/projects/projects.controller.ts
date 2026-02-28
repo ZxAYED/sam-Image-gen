@@ -10,8 +10,8 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
-  ApiBody,
   ApiBearerAuth,
+  ApiBody,
   ApiConsumes,
   ApiOperation,
   ApiTags,
@@ -22,6 +22,7 @@ import type { UploadedFile as UploadedImageFile } from 'src/common/types/uploade
 import { CreateImage1Dto } from './dto/create-image1.dto';
 import { CreateImage2Dto } from './dto/create-image2.dto';
 import { CreateImage3Dto } from './dto/create-image3.dto';
+import { CreateImage4Dto } from './dto/create-image4.dto';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { ImageRequestMode } from './dto/image-request-mode.enum';
 import { ProjectsService } from './projects.service';
@@ -156,5 +157,99 @@ export class ProjectsController {
     }
 
     return this.projects.createImage3ForProject(ownerId, dto, file);
+  }
+
+  @Roles(Role.USER as string)
+  @Post('gen-image4')
+  @ApiConsumes('application/json')
+  @ApiOperation({
+    summary: 'Generate or refine Image 4 (USP Highlight)',
+    description:
+      'JSON endpoint for Image 4. Uses projectContext + usps for GENERATION and REFINE.',
+  })
+  @ApiBody({
+    schema: {
+      oneOf: [
+        {
+          type: 'object',
+          required: ['idempotencyKey', 'mode', 'projectContext', 'usps'],
+          properties: {
+            idempotencyKey: { type: 'string' },
+            mode: { type: 'string', enum: ['GENERATION'] },
+            style: { type: 'string' },
+            usps: {
+              type: 'array',
+              minItems: 1,
+              maxItems: 4,
+              items: { type: 'string' },
+            },
+            projectContext: {
+              type: 'object',
+              required: ['id'],
+              properties: {
+                id: { type: 'string', format: 'uuid' },
+                name: { type: 'string' },
+                brandName: { type: 'string' },
+                productCategory: { type: 'string' },
+                targetMarketplace: { type: 'string' },
+                status: { type: 'string' },
+                mainImage: { type: 'string', format: 'uri' },
+                sku: { type: 'string' },
+                shortDescription: { type: 'string' },
+                brandFontHeading: { type: 'string' },
+                brandFontSubheading: { type: 'string' },
+              },
+            },
+          },
+        },
+        {
+          type: 'object',
+          required: [
+            'idempotencyKey',
+            'mode',
+            'projectContext',
+            'feedback',
+            'usps',
+          ],
+          properties: {
+            idempotencyKey: { type: 'string' },
+            mode: { type: 'string', enum: ['REFINE'] },
+            style: { type: 'string' },
+            feedback: { type: 'string' },
+            usps: {
+              type: 'array',
+              minItems: 1,
+              maxItems: 4,
+              items: { type: 'string' },
+            },
+            projectContext: {
+              type: 'object',
+              required: ['id'],
+              properties: {
+                id: { type: 'string', format: 'uuid' },
+                name: { type: 'string' },
+                brandName: { type: 'string' },
+                productCategory: { type: 'string' },
+                targetMarketplace: { type: 'string' },
+                status: { type: 'string' },
+                mainImage: { type: 'string', format: 'uri' },
+                sku: { type: 'string' },
+                shortDescription: { type: 'string' },
+                brandFontHeading: { type: 'string' },
+                brandFontSubheading: { type: 'string' },
+              },
+            },
+          },
+        },
+      ],
+    },
+  })
+  createImage4(@Req() req: { user?: User }, @Body() dto: CreateImage4Dto) {
+    const ownerId = req.user?.id;
+    if (!ownerId) {
+      throw new UnauthorizedException('Unauthorized');
+    }
+
+    return this.projects.createImage4ForProject(ownerId, dto);
   }
 }
