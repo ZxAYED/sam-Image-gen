@@ -18,11 +18,19 @@ export class CreateProjectDto {
   @MaxLength(150)
   productCategory!: string;
 
-  @ApiProperty({ enum: Marketplace, default: Marketplace.AMAZON })
+  @ApiProperty({
+    enum: ['AMAZON', 'EBAY', 'SHOPIFY', 'ETSY', 'WALMART', 'OTHER'],
+    description:
+      'Marketplace enum values: AMAZON, EBAY, SHOPIFY, ETSY, WALMART, OTHER.',
+  })
   @IsEnum(Marketplace)
   targetMarketplace!: Marketplace;
 
-  @ApiPropertyOptional({ enum: ProjectStatus, default: ProjectStatus.DRAFT })
+  @ApiPropertyOptional({
+    enum: ['DRAFT', 'ACTIVE', 'ARCHIVED'],
+    default: ProjectStatus.DRAFT,
+    description: 'Project status enum values: DRAFT, ACTIVE, ARCHIVED.',
+  })
   @IsOptional()
   @IsEnum(ProjectStatus)
   status?: ProjectStatus;

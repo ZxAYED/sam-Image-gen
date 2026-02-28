@@ -1,20 +1,32 @@
 import {
+  DeleteObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from '@aws-sdk/client-s3';
+import {
   Injectable,
   InternalServerErrorException,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { S3 } from 'aws-sdk';
 import { randomUUID } from 'crypto';
+import { UploadedFile } from 'src/common/types/uploaded-file.type';
 
 type UploadImageResult = {
   key: string;
   url: string;
 };
 
+type UploadBufferInput = {
+  buffer: Buffer;
+  mimeType?: string;
+  fileName?: string;
+  folder: string;
+};
+
 @Injectable()
 export class AwsS3Service {
-  private readonly s3: S3;
+  private readonly s3: S3Client;
   private readonly bucketName: string;
 
   constructor(private readonly config: ConfigService) {
@@ -24,7 +36,7 @@ export class AwsS3Service {
     const region = this.config.get<string>('AWS_REGION');
     this.bucketName = bucketName ?? 'sam-app-storage-eu';
 
-    this.s3 = new S3({
+    this.s3 = new S3Client({
       region,
       credentials:
         accessKeyId && secretAccessKey
@@ -48,42 +60,67 @@ export class AwsS3Service {
     return region;
   }
 
-  async uploadImage(file: Express.Multer.File): Promise<UploadImageResult> {
+  async uploadImage(file: UploadedFile): Promise<UploadImageResult> {
     const region = this.ensureAwsConfig();
     const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
     const key = `projects/main-images/${Date.now()}-${randomUUID()}-${safeName}`;
 
     try {
-      const uploaded = await this.s3
-        .upload({
+      await this.s3.send(
+        new PutObjectCommand({
           Bucket: this.bucketName,
           Key: key,
           Body: file.buffer,
           ContentType: file.mimetype,
-          ACL: 'public-read',
-        })
-        .promise();
+        }),
+      );
 
-      const url =
-        uploaded.Location ??
-        `https://${this.bucketName}.s3.${region}.amazonaws.com/${key}`;
-      console.log('🚀 ~ AwsS3Service ~ uploadImage ~ url:', url);
+      const url = `https://${this.bucketName}.s3.${region}.amazonaws.com/${key}`;
 
       return { key, url };
-    } catch {
+    } catch (error) {
+      console.error('Error uploading image to S3:', error);
       throw new InternalServerErrorException('Failed to upload image to S3');
+    }
+  }
+
+  async uploadBuffer(input: UploadBufferInput): Promise<UploadImageResult> {
+    const region = this.ensureAwsConfig();
+    const safeName = (
+      input.fileName ?? `${Date.now()}-${randomUUID()}`
+    ).replace(/[^a-zA-Z0-9._-]/g, '_');
+    const key = `${input.folder}/${Date.now()}-${randomUUID()}-${safeName}`;
+
+    try {
+      await this.s3.send(
+        new PutObjectCommand({
+          Bucket: this.bucketName,
+          Key: key,
+          Body: input.buffer,
+          ContentType: input.mimeType ?? 'application/octet-stream',
+        }),
+      );
+
+      const url = `https://${this.bucketName}.s3.${region}.amazonaws.com/${key}`;
+      return { key, url };
+    } catch (error) {
+      console.error('Error uploading buffer to S3:', error);
+      throw new InternalServerErrorException(
+        'Failed to upload generated image',
+      );
     }
   }
 
   async deleteImage(key: string): Promise<void> {
     try {
-      await this.s3
-        .deleteObject({
+      await this.s3.send(
+        new DeleteObjectCommand({
           Bucket: this.bucketName,
           Key: key,
-        })
-        .promise();
-    } catch {
+        }),
+      );
+    } catch (error) {
+      console.error('Error deleting image from S3:', error);
       // Best effort cleanup only.
     }
   }

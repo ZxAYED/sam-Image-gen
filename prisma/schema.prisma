@@ -42,6 +42,10 @@ enum ImageSlotType {
   CROSS_SELLING
   CLOSING
 }
+enum Role {
+  ADMIN
+  USER
+}
 
 //
 // User Model (with password and name)
@@ -54,6 +58,8 @@ model User {
   lastName  String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  role Role @default(USER)
 
   projects Project[]
 }
@@ -107,10 +113,11 @@ model Project {
   // Add relation to ProjectStats model
   projectStats ProjectStats?
 
-  @@index([name]) // Index for search by project name
-  @@index([brandName]) // Index for search by brand name
-  @@index([productCategory]) // Index for filtering by category
-  @@index([status]) // Index for filtering by status
+  @@index([name]) 
+  @@index([ownerId]) 
+  @@index([brandName])
+  @@index([productCategory]) 
+  @@index([status]) 
 }
 
 //
@@ -152,8 +159,9 @@ model Image1 {
   // Hardcoded requirements for Image 1
   requirement String @default("Pure white background (FFFFFF), Product centered and fits 85% of frame, No text or additional graphics, High resolution (minimum 1000px)")
 
+  sourceImageUrl String?
   imageUrl     String
-  generationId String   @unique // Ensure each generation request is unique (Idempotent)
+  generationId String?  @unique
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 }

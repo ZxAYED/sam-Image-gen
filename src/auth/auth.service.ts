@@ -70,7 +70,7 @@ export class AuthService {
       },
     });
 
-    return this.buildAuthResult(user);
+    return this.buildAuthResult(user as AuthResult['user']);
   }
 
   async login(params: LoginDto): Promise<AuthResult> {
@@ -91,7 +91,7 @@ export class AuthService {
       createdAt: user.createdAt,
     };
 
-    return this.buildAuthResult(safeUser);
+    return this.buildAuthResult(safeUser as AuthResult['user']);
   }
 
   async refreshToken(refreshToken: string): Promise<AccessTokenResult> {
