@@ -5,6 +5,7 @@ import {
   IsString,
   IsUUID,
   MaxLength,
+  ValidateIf,
 } from 'class-validator';
 import { ImageRequestMode } from './image-request-mode.enum';
 
@@ -17,33 +18,22 @@ export class CreateImage3Dto {
   @MaxLength(120)
   idempotencyKey!: string;
 
-  @ApiPropertyOptional({
+  @ApiProperty({
     format: 'uuid',
     example: 'f0c02bd3-e90f-4fdc-9f3f-13f4cc4a1f58',
-    description: 'Project ID (required for GENERATION)',
+    description: 'Project ID (required)',
   })
-  @IsOptional()
+  @ValidateIf((o: CreateImage3Dto) => Boolean(o.mode))
   @IsUUID()
-  projectId?: string;
+  projectId!: string;
 
-  @ApiPropertyOptional({
-    format: 'uuid',
-    example: '3f3f3a43-bdf2-4d08-94f7-c82e2de5fdc9',
-    description: 'Image 3 row ID (required for REFINE)',
-  })
-  @IsOptional()
-  @IsUUID()
-  imageId?: string;
-
-  @ApiPropertyOptional({
+  @ApiProperty({
     enum: ImageRequestMode,
     default: ImageRequestMode.GENERATION,
-    description:
-      'GENERATION for initial image, REFINE for versioned refinement',
+    description: 'Mode enum: GENERATION | REFINE',
   })
-  @IsOptional()
   @IsEnum(ImageRequestMode)
-  mode?: ImageRequestMode;
+  mode!: ImageRequestMode;
 
   @ApiPropertyOptional({
     example: 'playful',
@@ -67,8 +57,17 @@ export class CreateImage3Dto {
     example: 'Make the product bigger and add warmer tones',
     description: 'Required for REFINE mode',
   })
-  @IsOptional()
+  @ValidateIf((o: CreateImage3Dto) => o.mode === ImageRequestMode.REFINE)
   @IsString()
   @MaxLength(2000)
   feedback?: string;
+
+  @ApiPropertyOptional({
+    type: 'string',
+    format: 'binary',
+    description:
+      'Lifestyle provider image file. Required when mode=GENERATION.',
+  })
+  @IsOptional()
+  image?: unknown;
 }

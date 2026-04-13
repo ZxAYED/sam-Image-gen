@@ -5,6 +5,7 @@ import {
   IsString,
   IsUUID,
   MaxLength,
+  ValidateIf,
 } from 'class-validator';
 import { ImageRequestMode } from './image-request-mode.enum';
 
@@ -17,33 +18,22 @@ export class CreateImage2Dto {
   @MaxLength(120)
   idempotencyKey!: string;
 
-  @ApiPropertyOptional({
+  @ApiProperty({
     format: 'uuid',
     example: 'f0c02bd3-e90f-4fdc-9f3f-13f4cc4a1f58',
-    description: 'Project ID (required for GENERATION and REFINE)',
+    description: 'Project ID (required)',
   })
-  @IsOptional()
+  @ValidateIf((o: CreateImage2Dto) => Boolean(o.mode))
   @IsUUID()
-  projectId?: string;
+  projectId!: string;
 
-  @ApiPropertyOptional({
-    format: 'uuid',
-    example: 'c450d9ea-c0bb-4af9-a402-e715fc7879cb',
-    description: 'Image 2 row ID (required for REFINE)',
-  })
-  @IsOptional()
-  @IsUUID()
-  imageId?: string;
-
-  @ApiPropertyOptional({
+  @ApiProperty({
     enum: ImageRequestMode,
     default: ImageRequestMode.GENERATION,
-    description:
-      'GENERATION for first render, REFINE for versioned refine flow',
+    description: 'Mode enum: GENERATION | REFINE',
   })
-  @IsOptional()
   @IsEnum(ImageRequestMode)
-  mode?: ImageRequestMode;
+  mode!: ImageRequestMode;
 
   @ApiPropertyOptional({
     example: 'playful',
@@ -96,7 +86,7 @@ export class CreateImage2Dto {
     example: 'Increase emphasis on key fact 1 and improve text hierarchy',
     description: 'Required when mode=REFINE',
   })
-  @IsOptional()
+  @ValidateIf((o: CreateImage2Dto) => o.mode === ImageRequestMode.REFINE)
   @IsString()
   @MaxLength(2000)
   feedback?: string;

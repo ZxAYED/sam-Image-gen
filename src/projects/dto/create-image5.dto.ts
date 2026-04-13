@@ -8,6 +8,7 @@ import {
   IsString,
   IsUUID,
   MaxLength,
+  ValidateIf,
 } from 'class-validator';
 import { ImageRequestMode } from './image-request-mode.enum';
 
@@ -20,33 +21,22 @@ export class CreateImage5Dto {
   @MaxLength(120)
   idempotencyKey!: string;
 
-  @ApiPropertyOptional({
+  @ApiProperty({
     format: 'uuid',
     example: 'f0c02bd3-e90f-4fdc-9f3f-13f4cc4a1f58',
-    description: 'Project ID (required for GENERATION)',
+    description: 'Project ID (required)',
   })
-  @IsOptional()
+  @ValidateIf((o: CreateImage5Dto) => Boolean(o.mode))
   @IsUUID()
-  projectId?: string;
+  projectId!: string;
 
-  @ApiPropertyOptional({
-    format: 'uuid',
-    example: 'f305e8af-6a84-4f0c-b314-8a9c930fe6a7',
-    description: 'Image 5 row ID (required for REFINE)',
-  })
-  @IsOptional()
-  @IsUUID()
-  imageId?: string;
-
-  @ApiPropertyOptional({
+  @ApiProperty({
     enum: ImageRequestMode,
     default: ImageRequestMode.GENERATION,
-    description:
-      'GENERATION for first render, REFINE for versioned refine flow',
+    description: 'Mode enum: GENERATION | REFINE',
   })
-  @IsOptional()
   @IsEnum(ImageRequestMode)
-  mode?: ImageRequestMode;
+  mode!: ImageRequestMode;
 
   @ApiPropertyOptional({
     example: 'playful',
@@ -85,7 +75,7 @@ export class CreateImage5Dto {
     example: 'Make advantage 1 stronger and reduce limitation text length',
     description: 'Required when mode=REFINE',
   })
-  @IsOptional()
+  @ValidateIf((o: CreateImage5Dto) => o.mode === ImageRequestMode.REFINE)
   @IsString()
   @MaxLength(2000)
   feedback?: string;

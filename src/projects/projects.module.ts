@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AiService } from 'src/ai/ai.service';
+import { RedisCacheService } from 'src/common/cache/redis-cache.service';
 import { PrismaModule } from 'src/prisma/prisma.module';
 import { AwsS3Service } from './aws-s3.service';
 import { ProjectsImageService } from './projects-image-1to3.service';
@@ -16,6 +17,7 @@ import { ProjectsService } from './projects.service';
     ProjectsImageService,
     ProjectsImage4To7Service,
     ProjectsImageSharedService,
+    RedisCacheService,
     AwsS3Service,
     AiService,
   ],

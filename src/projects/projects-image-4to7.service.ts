@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { JobStatus } from '@prisma/client';
+import { ImageSlotType, JobStatus, OptimizationAction } from '@prisma/client';
 import { AiService } from 'src/ai/ai.service';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { sendResponse } from 'src/utils/sendResponse';
@@ -21,7 +21,31 @@ export class ProjectsImage4To7Service {
     private readonly prisma: PrismaService,
     private readonly ai: AiService,
     private readonly imageShared: ProjectsImageSharedService,
-  ) {}
+  ) { }
+
+  private async createOptimizationAudit(input: {
+    projectId: string;
+    slot: ImageSlotType;
+    action: OptimizationAction;
+    imageRecordId?: string;
+    versionNumber?: number;
+    prompt?: string | null;
+    refinePrompt?: string | null;
+    imageUrl?: string | null;
+  }) {
+    await this.prisma.optimizationAudit.create({
+      data: {
+        projectId: input.projectId,
+        slot: input.slot,
+        action: input.action,
+        imageRecordId: input.imageRecordId,
+        versionNumber: input.versionNumber,
+        prompt: input.prompt ?? null,
+        refinePrompt: input.refinePrompt ?? null,
+        imageUrl: input.imageUrl ?? null,
+      },
+    });
+  }
 
   async createImage4ForProject(ownerId: string, dto: CreateImage4Dto) {
     const mode = dto.mode;
@@ -105,29 +129,14 @@ export class ProjectsImage4To7Service {
     );
 
     // Step 2: Load project and ensure ownership
-    const project = await this.prisma.project.findFirst({
-      where: {
-        id: projectId,
-        ownerId,
-      },
-      select: {
-        id: true,
-        name: true,
-        brandName: true,
-        productCategory: true,
-        targetMarketplace: true,
-        status: true,
-        mainImage: true,
-        sku: true,
-        shortDescription: true,
-        brandFontHeading: true,
-        brandFontSubheading: true,
-      },
-    });
-
-    if (!project) {
-      throw new NotFoundException('Project not found');
-    }
+    const project = await this.imageShared.getOwnedProjectContext(
+      projectId,
+      ownerId,
+    );
+    console.log(
+      '🚀 ~ ProjectsImage4To7Service ~ generateImage4 ~ project:',
+      project,
+    );
 
     // Step 3: Call Image4 generation API
     const aiResult = await this.ai.generateImage4({
@@ -135,6 +144,10 @@ export class ProjectsImage4To7Service {
       style: dto.style,
       usps: dto.usps,
     });
+    console.log(
+      '🚀 ~ ProjectsImage4To7Service ~ generateImage4 ~ aiResult:',
+      aiResult,
+    );
 
     // Step 4: Resolve generated output URL
     const generatedImageUrl = await this.imageShared.resolveGeneratedImageUrl(
@@ -199,6 +212,17 @@ export class ProjectsImage4To7Service {
       throw error;
     }
 
+    await this.createOptimizationAudit({
+      projectId,
+      slot: ImageSlotType.USP_HIGHLIGHT,
+      action: OptimizationAction.GENERATION,
+      imageRecordId: image4.id,
+      versionNumber: image4.versionNumber,
+      prompt: image4.generatedPrompt,
+      refinePrompt: image4.refinePrompt,
+      imageUrl: image4.imageUrl,
+    });
+
     return sendResponse('Image 4 generated successfully', {
       image4,
       aiMeta: {
@@ -209,12 +233,9 @@ export class ProjectsImage4To7Service {
   }
 
   private async refineImage4(ownerId: string, dto: CreateImage4Dto) {
-    // Step 1: Validate refine input (projectId + imageId + feedback + usps)
+    // Step 1: Validate refine input (projectId + feedback + usps)
     if (!dto.projectId) {
       throw new BadRequestException('projectId is required for refine mode');
-    }
-    if (!dto.imageId) {
-      throw new BadRequestException('imageId is required for refine mode');
     }
     if (!dto.feedback?.trim()) {
       throw new BadRequestException('feedback is required for refine mode');
@@ -223,7 +244,6 @@ export class ProjectsImage4To7Service {
       throw new BadRequestException('usps are required for refine mode');
     }
     const projectId = dto.projectId;
-    const imageId = dto.imageId;
 
     const key = this.imageShared.requireIdempotencyKey(dto.idempotencyKey);
     const idempotency = this.imageShared.buildGenerationId(
@@ -233,7 +253,6 @@ export class ProjectsImage4To7Service {
       {
         ownerId,
         projectId,
-        imageId,
         style: dto.style ?? null,
         feedback: dto.feedback,
         usps: dto.usps,
@@ -262,32 +281,20 @@ export class ProjectsImage4To7Service {
     );
 
     // Step 2: Verify project ownership and fetch DB context
-    const project = await this.prisma.project.findFirst({
-      where: { id: projectId, ownerId },
-      select: {
-        id: true,
-        name: true,
-        brandName: true,
-        productCategory: true,
-        targetMarketplace: true,
-        status: true,
-        mainImage: true,
-        sku: true,
-        shortDescription: true,
-        brandFontHeading: true,
-        brandFontSubheading: true,
-      },
-    });
-    if (!project) {
-      throw new NotFoundException('Project not found');
-    }
+    const project = await this.imageShared.getOwnedProjectContext(
+      projectId,
+      ownerId,
+    );
 
     const image4Source = await this.prisma.image4.findFirst({
-      where: { id: imageId, projectId },
+      where: { projectId },
+      orderBy: [{ versionNumber: 'desc' }, { createdAt: 'desc' }],
       select: { id: true },
     });
     if (!image4Source) {
-      throw new NotFoundException('Image 4 not found');
+      throw new NotFoundException(
+        'No generated Image 4 found for this project to refine',
+      );
     }
     const projectContextPayload = project as unknown as Record<string, unknown>;
 
@@ -370,6 +377,17 @@ export class ProjectsImage4To7Service {
       throw error;
     }
 
+    await this.createOptimizationAudit({
+      projectId,
+      slot: ImageSlotType.USP_HIGHLIGHT,
+      action: OptimizationAction.REFINE,
+      imageRecordId: image4.id,
+      versionNumber: image4.versionNumber,
+      prompt: image4.generatedPrompt,
+      refinePrompt: image4.refinePrompt,
+      imageUrl: image4.imageUrl,
+    });
+
     return sendResponse('Image 4 refined successfully', {
       image4,
       aiMeta: {
@@ -431,25 +449,10 @@ export class ProjectsImage4To7Service {
     );
 
     // Step 2: Verify project ownership
-    const project = await this.prisma.project.findFirst({
-      where: { id: projectId, ownerId },
-      select: {
-        id: true,
-        name: true,
-        brandName: true,
-        productCategory: true,
-        targetMarketplace: true,
-        status: true,
-        mainImage: true,
-        sku: true,
-        shortDescription: true,
-        brandFontHeading: true,
-        brandFontSubheading: true,
-      },
-    });
-    if (!project) {
-      throw new NotFoundException('Project not found');
-    }
+    const project = await this.imageShared.getOwnedProjectContext(
+      projectId,
+      ownerId,
+    );
 
     // Step 3: Call Image5 generation API
     const aiResult = await this.ai.generateImage5({
@@ -524,6 +527,17 @@ export class ProjectsImage4To7Service {
       throw error;
     }
 
+    await this.createOptimizationAudit({
+      projectId,
+      slot: ImageSlotType.COMPARISON,
+      action: OptimizationAction.GENERATION,
+      imageRecordId: image5.id,
+      versionNumber: image5.versionNumber,
+      prompt: image5.generatedPrompt,
+      refinePrompt: image5.refinePrompt,
+      imageUrl: image5.imageUrl,
+    });
+
     return sendResponse('Image 5 generated successfully', {
       image5,
       aiMeta: {
@@ -534,12 +548,9 @@ export class ProjectsImage4To7Service {
   }
 
   private async refineImage5(ownerId: string, dto: CreateImage5Dto) {
-    // Step 1: Validate refine input (projectId + imageId + feedback + comparison arrays)
+    // Step 1: Validate refine input (projectId + feedback + comparison arrays)
     if (!dto.projectId) {
       throw new BadRequestException('projectId is required for refine mode');
-    }
-    if (!dto.imageId) {
-      throw new BadRequestException('imageId is required for refine mode');
     }
     if (!dto.feedback?.trim()) {
       throw new BadRequestException('feedback is required for refine mode');
@@ -551,7 +562,6 @@ export class ProjectsImage4To7Service {
       throw new BadRequestException('limitations are required for refine mode');
     }
     const projectId = dto.projectId;
-    const imageId = dto.imageId;
 
     const key = this.imageShared.requireIdempotencyKey(dto.idempotencyKey);
     const idempotency = this.imageShared.buildGenerationId(
@@ -561,7 +571,6 @@ export class ProjectsImage4To7Service {
       {
         ownerId,
         projectId,
-        imageId,
         style: dto.style ?? null,
         feedback: dto.feedback,
         advantages: dto.advantages,
@@ -591,32 +600,20 @@ export class ProjectsImage4To7Service {
     );
 
     // Step 2: Verify project ownership and fetch DB context
-    const project = await this.prisma.project.findFirst({
-      where: { id: projectId, ownerId },
-      select: {
-        id: true,
-        name: true,
-        brandName: true,
-        productCategory: true,
-        targetMarketplace: true,
-        status: true,
-        mainImage: true,
-        sku: true,
-        shortDescription: true,
-        brandFontHeading: true,
-        brandFontSubheading: true,
-      },
-    });
-    if (!project) {
-      throw new NotFoundException('Project not found');
-    }
+    const project = await this.imageShared.getOwnedProjectContext(
+      projectId,
+      ownerId,
+    );
 
     const image5Source = await this.prisma.image5.findFirst({
-      where: { id: imageId, projectId },
+      where: { projectId },
+      orderBy: [{ versionNumber: 'desc' }, { createdAt: 'desc' }],
       select: { id: true },
     });
     if (!image5Source) {
-      throw new NotFoundException('Image 5 not found');
+      throw new NotFoundException(
+        'No generated Image 5 found for this project to refine',
+      );
     }
     const projectContextPayload = project as unknown as Record<string, unknown>;
 
@@ -702,6 +699,17 @@ export class ProjectsImage4To7Service {
       throw error;
     }
 
+    await this.createOptimizationAudit({
+      projectId,
+      slot: ImageSlotType.COMPARISON,
+      action: OptimizationAction.REFINE,
+      imageRecordId: image5.id,
+      versionNumber: image5.versionNumber,
+      prompt: image5.generatedPrompt,
+      refinePrompt: image5.refinePrompt,
+      imageUrl: image5.imageUrl,
+    });
+
     return sendResponse('Image 5 refined successfully', {
       image5,
       aiMeta: {
@@ -759,25 +767,10 @@ export class ProjectsImage4To7Service {
     );
 
     // Step 2: Verify project ownership and fetch DB context
-    const project = await this.prisma.project.findFirst({
-      where: { id: projectId, ownerId },
-      select: {
-        id: true,
-        name: true,
-        brandName: true,
-        productCategory: true,
-        targetMarketplace: true,
-        status: true,
-        mainImage: true,
-        sku: true,
-        shortDescription: true,
-        brandFontHeading: true,
-        brandFontSubheading: true,
-      },
-    });
-    if (!project) {
-      throw new NotFoundException('Project not found');
-    }
+    const project = await this.imageShared.getOwnedProjectContext(
+      projectId,
+      ownerId,
+    );
 
     // Step 3: Call Image6 generation API
     const aiResult = await this.ai.generateImage6({
@@ -851,6 +844,17 @@ export class ProjectsImage4To7Service {
       throw error;
     }
 
+    await this.createOptimizationAudit({
+      projectId,
+      slot: ImageSlotType.CROSS_SELLING,
+      action: OptimizationAction.GENERATION,
+      imageRecordId: image6.id,
+      versionNumber: image6.versionNumber,
+      prompt: image6.generatedPrompt,
+      refinePrompt: image6.refinePrompt,
+      imageUrl: image6.imageUrl,
+    });
+
     return sendResponse('Image 6 generated successfully', {
       image6,
       aiMeta: {
@@ -861,12 +865,9 @@ export class ProjectsImage4To7Service {
   }
 
   private async refineImage6(ownerId: string, dto: CreateImage6Dto) {
-    // Step 1: Validate refine input (projectId + imageId + feedback + product names)
+    // Step 1: Validate refine input (projectId + feedback + product names)
     if (!dto.projectId) {
       throw new BadRequestException('projectId is required for refine mode');
-    }
-    if (!dto.imageId) {
-      throw new BadRequestException('imageId is required for refine mode');
     }
     if (!dto.feedback?.trim()) {
       throw new BadRequestException('feedback is required for refine mode');
@@ -877,7 +878,6 @@ export class ProjectsImage4To7Service {
       );
     }
     const projectId = dto.projectId;
-    const imageId = dto.imageId;
 
     const key = this.imageShared.requireIdempotencyKey(dto.idempotencyKey);
     const idempotency = this.imageShared.buildGenerationId(
@@ -887,7 +887,6 @@ export class ProjectsImage4To7Service {
       {
         ownerId,
         projectId,
-        imageId,
         style: dto.style ?? null,
         feedback: dto.feedback,
         productNames: dto.productNames,
@@ -916,32 +915,20 @@ export class ProjectsImage4To7Service {
     );
 
     // Step 2: Verify project ownership and fetch DB context
-    const project = await this.prisma.project.findFirst({
-      where: { id: projectId, ownerId },
-      select: {
-        id: true,
-        name: true,
-        brandName: true,
-        productCategory: true,
-        targetMarketplace: true,
-        status: true,
-        mainImage: true,
-        sku: true,
-        shortDescription: true,
-        brandFontHeading: true,
-        brandFontSubheading: true,
-      },
-    });
-    if (!project) {
-      throw new NotFoundException('Project not found');
-    }
+    const project = await this.imageShared.getOwnedProjectContext(
+      projectId,
+      ownerId,
+    );
 
     const image6Source = await this.prisma.image6.findFirst({
-      where: { id: imageId, projectId },
+      where: { projectId },
+      orderBy: [{ versionNumber: 'desc' }, { createdAt: 'desc' }],
       select: { id: true },
     });
     if (!image6Source) {
-      throw new NotFoundException('Image 6 not found');
+      throw new NotFoundException(
+        'No generated Image 6 found for this project to refine',
+      );
     }
     const projectContextPayload = project as unknown as Record<string, unknown>;
 
@@ -1026,6 +1013,17 @@ export class ProjectsImage4To7Service {
       throw error;
     }
 
+    await this.createOptimizationAudit({
+      projectId,
+      slot: ImageSlotType.CROSS_SELLING,
+      action: OptimizationAction.REFINE,
+      imageRecordId: image6.id,
+      versionNumber: image6.versionNumber,
+      prompt: image6.generatedPrompt,
+      refinePrompt: image6.refinePrompt,
+      imageUrl: image6.imageUrl,
+    });
+
     return sendResponse('Image 6 refined successfully', {
       image6,
       aiMeta: {
@@ -1087,25 +1085,10 @@ export class ProjectsImage4To7Service {
     );
 
     // Step 2: Verify project ownership and fetch DB context
-    const project = await this.prisma.project.findFirst({
-      where: { id: projectId, ownerId },
-      select: {
-        id: true,
-        name: true,
-        brandName: true,
-        productCategory: true,
-        targetMarketplace: true,
-        status: true,
-        mainImage: true,
-        sku: true,
-        shortDescription: true,
-        brandFontHeading: true,
-        brandFontSubheading: true,
-      },
-    });
-    if (!project) {
-      throw new NotFoundException('Project not found');
-    }
+    const project = await this.imageShared.getOwnedProjectContext(
+      projectId,
+      ownerId,
+    );
 
     // Step 3: Call Image7 generation API
     const aiResult = await this.ai.generateImage7({
@@ -1176,6 +1159,17 @@ export class ProjectsImage4To7Service {
       throw error;
     }
 
+    await this.createOptimizationAudit({
+      projectId,
+      slot: ImageSlotType.CLOSING,
+      action: OptimizationAction.GENERATION,
+      imageRecordId: image7.id,
+      versionNumber: image7.versionNumber,
+      prompt: image7.generatedPrompt,
+      refinePrompt: image7.refinePrompt,
+      imageUrl: image7.imageUrl,
+    });
+
     return sendResponse('Image 7 generated successfully', {
       image7,
       aiMeta: {
@@ -1186,12 +1180,9 @@ export class ProjectsImage4To7Service {
   }
 
   private async refineImage7(ownerId: string, dto: CreateImage7Dto) {
-    // Step 1: Validate refine input (projectId + imageId + feedback + direction/headline)
+    // Step 1: Validate refine input (projectId + feedback + direction/headline)
     if (!dto.projectId) {
       throw new BadRequestException('projectId is required for refine mode');
-    }
-    if (!dto.imageId) {
-      throw new BadRequestException('imageId is required for refine mode');
     }
     if (!dto.feedback?.trim()) {
       throw new BadRequestException('feedback is required for refine mode');
@@ -1203,7 +1194,6 @@ export class ProjectsImage4To7Service {
       throw new BadRequestException('headline is required for refine mode');
     }
     const projectId = dto.projectId;
-    const imageId = dto.imageId;
 
     const key = this.imageShared.requireIdempotencyKey(dto.idempotencyKey);
     const idempotency = this.imageShared.buildGenerationId(
@@ -1213,7 +1203,6 @@ export class ProjectsImage4To7Service {
       {
         ownerId,
         projectId,
-        imageId,
         style: dto.style ?? null,
         feedback: dto.feedback,
         direction: dto.direction,
@@ -1243,32 +1232,20 @@ export class ProjectsImage4To7Service {
     );
 
     // Step 2: Verify project ownership and fetch DB context
-    const project = await this.prisma.project.findFirst({
-      where: { id: projectId, ownerId },
-      select: {
-        id: true,
-        name: true,
-        brandName: true,
-        productCategory: true,
-        targetMarketplace: true,
-        status: true,
-        mainImage: true,
-        sku: true,
-        shortDescription: true,
-        brandFontHeading: true,
-        brandFontSubheading: true,
-      },
-    });
-    if (!project) {
-      throw new NotFoundException('Project not found');
-    }
+    const project = await this.imageShared.getOwnedProjectContext(
+      projectId,
+      ownerId,
+    );
 
     const image7Source = await this.prisma.image7.findFirst({
-      where: { id: imageId, projectId },
+      where: { projectId },
+      orderBy: [{ versionNumber: 'desc' }, { createdAt: 'desc' }],
       select: { id: true },
     });
     if (!image7Source) {
-      throw new NotFoundException('Image 7 not found');
+      throw new NotFoundException(
+        'No generated Image 7 found for this project to refine',
+      );
     }
     const projectContextPayload = project as unknown as Record<string, unknown>;
 
@@ -1349,6 +1326,17 @@ export class ProjectsImage4To7Service {
       }
       throw error;
     }
+
+    await this.createOptimizationAudit({
+      projectId,
+      slot: ImageSlotType.CLOSING,
+      action: OptimizationAction.REFINE,
+      imageRecordId: image7.id,
+      versionNumber: image7.versionNumber,
+      prompt: image7.generatedPrompt,
+      refinePrompt: image7.refinePrompt,
+      imageUrl: image7.imageUrl,
+    });
 
     return sendResponse('Image 7 refined successfully', {
       image7,

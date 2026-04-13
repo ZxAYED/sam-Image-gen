@@ -1,10 +1,14 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
+  NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { createHash } from 'crypto';
+import { RedisCacheService } from 'src/common/cache/redis-cache.service';
+import { PrismaService } from 'src/prisma/prisma.service';
 import { AwsS3Service } from './aws-s3.service';
 import { ImageRequestMode } from './dto/image-request-mode.enum';
 
@@ -19,7 +23,95 @@ type ImageSlot =
 
 @Injectable()
 export class ProjectsImageSharedService {
-  constructor(private readonly s3: AwsS3Service) {}
+  private readonly projectContextKeyPrefix = 'project-context:';
+
+  constructor(
+    private readonly s3: AwsS3Service,
+    private readonly prisma: PrismaService,
+    private readonly cache: RedisCacheService,
+  ) {}
+
+  async getOwnedProjectContext(projectId: string, ownerId: string) {
+    const cacheKey = `${this.projectContextKeyPrefix}${projectId}`;
+    const cached = await this.cache.getJson<{
+      ownerId: string;
+      context: {
+        id: string;
+        name: string;
+        brandName: string;
+        productCategory: string;
+        targetMarketplace: string;
+        status: string;
+        mainImage: string | null;
+        sku: string | null;
+        brandLogoAssetId: string | null;
+        shortDescription: string | null;
+        brandFontHeading: string;
+        brandFontSubheading: string;
+      };
+    }>(cacheKey);
+
+    if (cached) {
+      if (cached.ownerId !== ownerId) {
+        throw new ForbiddenException('You do not have access to this project');
+      }
+      return cached.context;
+    }
+
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: {
+        ownerId: true,
+        id: true,
+        name: true,
+        brandName: true,
+        productCategory: true,
+        targetMarketplace: true,
+        status: true,
+        mainImage: true,
+        sku: true,
+        brandLogoAssetId: true,
+        shortDescription: true,
+        brandFontHeading: true,
+        brandFontSubheading: true,
+      },
+    });
+
+    if (!project) {
+      throw new NotFoundException('Project does not exist');
+    }
+
+    if (project.ownerId !== ownerId) {
+      throw new ForbiddenException('You do not have access to this project');
+    }
+
+    const context = {
+      id: project.id,
+      name: project.name,
+      brandName: project.brandName,
+      productCategory: project.productCategory,
+      targetMarketplace: project.targetMarketplace,
+      status: project.status,
+      mainImage: project.mainImage,
+      sku: project.sku,
+      brandLogoAssetId: project.brandLogoAssetId,
+      shortDescription: project.shortDescription,
+      brandFontHeading: project.brandFontHeading,
+      brandFontSubheading: project.brandFontSubheading,
+    };
+
+    await this.cache.setJson(cacheKey, {
+      ownerId: project.ownerId,
+      context,
+    });
+
+    return context;
+  }
+
+  async invalidateProjectContextCache(projectId: string): Promise<void> {
+    const cacheKey = `${this.projectContextKeyPrefix}${projectId}`;
+    await this.cache.del(cacheKey);
+  }
 
   requireIdempotencyKey(idempotencyKey?: string): string {
     const key = idempotencyKey?.trim();

@@ -42,6 +42,12 @@ enum ImageSlotType {
   CROSS_SELLING
   CLOSING
 }
+
+enum OptimizationAction {
+  GENERATION
+  REFINE
+}
+
 enum Role {
   ADMIN
   USER
@@ -75,6 +81,7 @@ model Project {
   name              String
   brandName         String
   productCategory   String
+  productTitle      String
   targetMarketplace Marketplace @default(OTHER)
 
   status ProjectStatus @default(DRAFT)
@@ -83,12 +90,18 @@ model Project {
   mainImage String?
 
   // Brand Info
-  brandLogoAssetId String? @db.Uuid
-  brandLogo        Asset?  @relation("BrandLogo", fields: [brandLogoAssetId], references: [id])
+  brandLogoAssetId String?
+  brandLogoInfoId  String? @db.Uuid
+  brandLogoInfo    Asset?  @relation("brandLogoInfo", fields: [brandLogoInfoId], references: [id])
 
   // Product Info
-  sku              String?
-  shortDescription String?
+  sku                    String?
+  shortDescription       String?
+  downloadImageFormat    String?
+  usps                   String[] @default([])
+  optimizeKeywordsAmazon Boolean  @default(false)
+  optimizeKeywordsGoogle Boolean  @default(false)
+  selectedLanguages      String[] @default([])
 
   // Font Information for the Brand
   brandFontHeading    String @default("Montserrat")
@@ -105,6 +118,7 @@ model Project {
   image5 Image5[]
   image6 Image6[]
   image7 Image7[]
+  optimizationAudits OptimizationAudit[]
 
   // Project Stats (indexed for faster access in the dashboard)
   imagesCreated     Int @default(0)
@@ -113,11 +127,31 @@ model Project {
   // Add relation to ProjectStats model
   projectStats ProjectStats?
 
-  @@index([name]) 
-  @@index([ownerId]) 
+  @@index([name])
+  @@index([ownerId])
   @@index([brandName])
-  @@index([productCategory]) 
-  @@index([status]) 
+  @@index([productCategory])
+  @@index([status])
+}
+
+model OptimizationAudit {
+  id String @id @default(uuid()) @db.Uuid
+
+  projectId String  @db.Uuid
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  slot           ImageSlotType
+  action         OptimizationAction
+  imageRecordId  String? @db.Uuid
+  versionNumber  Int?
+  prompt         String?
+  refinePrompt   String?
+  imageUrl       String?
+
+  createdAt DateTime @default(now())
+
+  @@index([projectId, createdAt])
+  @@index([slot, action])
 }
 
 //
@@ -139,7 +173,7 @@ model Asset {
   lifestyleImage Image3[] @relation("LifestyleImages")
 
   // Relation to brand logo
-  brandLogo Project[] @relation("BrandLogo")
+  brandLogoInfo Project[] @relation("brandLogoInfo")
 }
 
 //
@@ -160,10 +194,10 @@ model Image1 {
   requirement String @default("Pure white background (FFFFFF), Product centered and fits 85% of frame, No text or additional graphics, High resolution (minimum 1000px)")
 
   sourceImageUrl String?
-  imageUrl     String
-  generationId String?  @unique
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  imageUrl       String
+  generationId   String?  @unique
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 }
 
 // Table for Image 2 - Key Facts Image

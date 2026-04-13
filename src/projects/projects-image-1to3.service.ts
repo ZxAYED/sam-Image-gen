@@ -5,7 +5,7 @@ import {
   InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
-import { JobStatus } from '@prisma/client';
+import { ImageSlotType, JobStatus, OptimizationAction } from '@prisma/client';
 import { AiService } from 'src/ai/ai.service';
 import type { UploadedFile } from 'src/common/types/uploaded-file.type';
 import { PrismaService } from 'src/prisma/prisma.service';
@@ -24,7 +24,51 @@ export class ProjectsImageService {
     private readonly s3: AwsS3Service,
     private readonly ai: AiService,
     private readonly imageShared: ProjectsImageSharedService,
-  ) {}
+  ) { }
+
+  private mapAiStatusToJobStatus(status?: string): JobStatus {
+    const normalized = status?.trim().toUpperCase();
+    switch (normalized) {
+      case 'QUEUED':
+        return JobStatus.QUEUED;
+      case 'RUNNING':
+      case 'IN_PROGRESS':
+      case 'PROCESSING':
+        return JobStatus.RUNNING;
+      case 'FAILED':
+      case 'ERROR':
+        return JobStatus.FAILED;
+      case 'CANCELED':
+      case 'CANCELLED':
+        return JobStatus.CANCELED;
+      default:
+        return JobStatus.SUCCEEDED;
+    }
+  }
+
+  private async createOptimizationAudit(input: {
+    projectId: string;
+    slot: ImageSlotType;
+    action: OptimizationAction;
+    imageRecordId?: string;
+    versionNumber?: number;
+    prompt?: string | null;
+    refinePrompt?: string | null;
+    imageUrl?: string | null;
+  }) {
+    await this.prisma.optimizationAudit.create({
+      data: {
+        projectId: input.projectId,
+        slot: input.slot,
+        action: input.action,
+        imageRecordId: input.imageRecordId,
+        versionNumber: input.versionNumber,
+        prompt: input.prompt ?? null,
+        refinePrompt: input.refinePrompt ?? null,
+        imageUrl: input.imageUrl ?? null,
+      },
+    });
+  }
 
   async createImage1ForProject(
     ownerId: string,
@@ -106,34 +150,17 @@ export class ProjectsImageService {
       },
       select: { generationId: true },
     });
+
     this.imageShared.throwIfKeyReusedWithDifferentPayload(
       existingImage1ByKey?.generationId ?? null,
       idempotency.generationId,
     );
 
     // Step 2: Load project and ensure ownership
-    const project = await this.prisma.project.findFirst({
-      where: {
-        id: projectId,
-        ownerId,
-      },
-      select: {
-        id: true,
-        name: true,
-        brandName: true,
-        productCategory: true,
-        targetMarketplace: true,
-        status: true,
-        sku: true,
-        shortDescription: true,
-        brandFontHeading: true,
-        brandFontSubheading: true,
-      },
-    });
-
-    if (!project) {
-      throw new NotFoundException('Project not found');
-    }
+    const project = await this.imageShared.getOwnedProjectContext(
+      projectId,
+      ownerId,
+    );
 
     // Step 3: Upload main image to S3
     const uploadedMainImage = await this.s3.uploadImage(file);
@@ -144,6 +171,10 @@ export class ProjectsImageService {
       style: dto.style,
       imageUrl: uploadedMainImage.url,
     });
+    console.log(
+      '🚀 ~ ProjectsImageService ~ generateImage1 ~ aiResult:',
+      aiResult,
+    );
 
     // Step 5: Resolve generated output URL (AI URL or AI binary -> S3)
     const generatedImageUrl = await this.imageShared.resolveGeneratedImageUrl(
@@ -185,10 +216,11 @@ export class ProjectsImageService {
             projectId,
             versionNumber: 1,
             generatedPrompt: aiResult.prompt,
+            refinePrompt: aiResult.refinePrompt ?? null,
             imageUrl: generatedImageUrl,
             sourceImageUrl: uploadedMainImage.url,
             generationId: idempotency.generationId,
-            status: JobStatus.SUCCEEDED,
+            status: this.mapAiStatusToJobStatus(aiResult.status),
           },
         });
       });
@@ -214,6 +246,18 @@ export class ProjectsImageService {
         : new InternalServerErrorException('Failed to save image 1');
     }
 
+    await this.createOptimizationAudit({
+      projectId,
+      slot: ImageSlotType.MAIN_PRODUCT,
+      action: OptimizationAction.GENERATION,
+      imageRecordId: image1.id,
+      versionNumber: image1.versionNumber,
+      prompt: image1.generatedPrompt,
+      refinePrompt: image1.refinePrompt,
+      imageUrl: image1.imageUrl,
+    });
+    await this.imageShared.invalidateProjectContextCache(projectId);
+
     return sendResponse('Image 1 generated successfully', {
       image1,
       aiMeta: {
@@ -224,18 +268,32 @@ export class ProjectsImageService {
   }
 
   private async refineImage1(ownerId: string, dto: CreateImage1Dto) {
-    // Step 1: Validate refine input (projectId + imageId + feedback)
+    // Step 1: Validate refine input (projectId + feedback)
     if (!dto.projectId) {
       throw new BadRequestException('projectId is required for refine mode');
-    }
-    if (!dto.imageId) {
-      throw new BadRequestException('imageId is required for refine mode');
     }
     if (!dto.feedback?.trim()) {
       throw new BadRequestException('feedback is required for refine mode');
     }
     const projectId = dto.projectId;
-    const imageId = dto.imageId;
+
+    // Step 2: Verify project ownership and fetch DB context
+    const project = await this.imageShared.getOwnedProjectContext(
+      projectId,
+      ownerId,
+    );
+    // Step 2: Find latest source Image 1 for this ProjectContextDto
+    const image1Source = await this.prisma.image1.findFirst({
+      where: { projectId },
+      orderBy: [{ versionNumber: 'desc' }, { createdAt: 'desc' }],
+      select: { id: true, imageUrl: true },
+    });
+    if (!image1Source) {
+      throw new NotFoundException(
+        'No generated Image 1 found for this project to refine',
+      );
+    }
+    const projectContextPayload = project as unknown as Record<string, unknown>;
 
     const key = this.imageShared.requireIdempotencyKey(dto.idempotencyKey);
     const idempotency = this.imageShared.buildGenerationId(
@@ -245,7 +303,7 @@ export class ProjectsImageService {
       {
         ownerId,
         projectId,
-        imageId,
+        sourceImageId: image1Source.id,
         style: dto.style ?? null,
         feedback: dto.feedback,
       },
@@ -272,43 +330,17 @@ export class ProjectsImageService {
       idempotency.generationId,
     );
 
-    // Step 2: Verify project ownership and fetch DB context
-    const project = await this.prisma.project.findFirst({
-      where: { id: projectId, ownerId },
-      select: {
-        id: true,
-        name: true,
-        brandName: true,
-        productCategory: true,
-        targetMarketplace: true,
-        status: true,
-        mainImage: true,
-        sku: true,
-        shortDescription: true,
-        brandFontHeading: true,
-        brandFontSubheading: true,
-      },
-    });
-    if (!project) {
-      throw new NotFoundException('Project not found');
-    }
-
-    const image1Source = await this.prisma.image1.findFirst({
-      where: { id: imageId, projectId },
-      select: { id: true, imageUrl: true },
-    });
-    if (!image1Source) {
-      throw new NotFoundException('Image 1 not found');
-    }
-    const projectContextPayload = project as unknown as Record<string, unknown>;
-
-    // Step 3: Call Image1 refine API with DB context + source image URL
+    // Step 3: Call Image1 refine API with DB context + latest source image URL
     const aiResult = await this.ai.refineImage1({
       projectContext: projectContextPayload,
       style: dto.style,
       feedback: dto.feedback,
       imageUrl: image1Source.imageUrl,
     });
+    console.log(
+      '🚀 ~ ProjectsImageService ~ refineImage1 ~ aiResult:',
+      aiResult,
+    );
 
     // Step 4: Resolve generated output URL
     const generatedImageUrl = await this.imageShared.resolveGeneratedImageUrl(
@@ -356,7 +388,7 @@ export class ProjectsImageService {
             imageUrl: generatedImageUrl,
             sourceImageUrl: image1Source.imageUrl,
             generationId: idempotency.generationId,
-            status: JobStatus.SUCCEEDED,
+            status: this.mapAiStatusToJobStatus(aiResult.status),
           },
         });
       });
@@ -378,6 +410,17 @@ export class ProjectsImageService {
       throw error;
     }
 
+    await this.createOptimizationAudit({
+      projectId,
+      slot: ImageSlotType.MAIN_PRODUCT,
+      action: OptimizationAction.REFINE,
+      imageRecordId: image1.id,
+      versionNumber: image1.versionNumber,
+      prompt: image1.generatedPrompt,
+      refinePrompt: image1.refinePrompt,
+      imageUrl: image1.imageUrl,
+    });
+
     return sendResponse('Image 1 refined successfully', {
       image1,
       aiMeta: {
@@ -389,6 +432,7 @@ export class ProjectsImageService {
   }
 
   private async generateImage2(ownerId: string, dto: CreateImage2Dto) {
+    console.log('🚀 ~ ProjectsImageService ~ generateImage2 ~ dto:', dto);
     // Step 1: Validate generation input
     if (!dto.projectId) {
       throw new BadRequestException('projectId is required for generation');
@@ -436,29 +480,10 @@ export class ProjectsImageService {
     );
 
     // Step 2: Load project and ensure ownership
-    const project = await this.prisma.project.findFirst({
-      where: {
-        id: projectId,
-        ownerId,
-      },
-      select: {
-        id: true,
-        name: true,
-        brandName: true,
-        productCategory: true,
-        targetMarketplace: true,
-        status: true,
-        sku: true,
-        shortDescription: true,
-        brandFontHeading: true,
-        brandFontSubheading: true,
-        mainImage: true,
-      },
-    });
-
-    if (!project) {
-      throw new NotFoundException('Project not found');
-    }
+    const project = await this.imageShared.getOwnedProjectContext(
+      projectId,
+      ownerId,
+    );
     if (!project.mainImage) {
       throw new BadRequestException(
         'Project main image is missing. Generate Image 1 first',
@@ -474,6 +499,10 @@ export class ProjectsImageService {
       logoPosition: dto.logoPosition,
       imageUrl: project.mainImage,
     });
+    console.log(
+      '🚀 ~ ProjectsImageService ~ generateImage2 ~ aiResult:',
+      aiResult,
+    );
 
     // Step 4: Resolve generated output URL
     const generatedImageUrl = await this.imageShared.resolveGeneratedImageUrl(
@@ -540,6 +569,17 @@ export class ProjectsImageService {
       throw error;
     }
 
+    await this.createOptimizationAudit({
+      projectId,
+      slot: ImageSlotType.KEY_FACTS,
+      action: OptimizationAction.GENERATION,
+      imageRecordId: image2.id,
+      versionNumber: image2.versionNumber,
+      prompt: image2.generatedPrompt,
+      refinePrompt: image2.refinePrompt,
+      imageUrl: image2.imageUrl,
+    });
+
     return sendResponse('Image 2 generated successfully', {
       image2,
       aiMeta: {
@@ -550,15 +590,11 @@ export class ProjectsImageService {
   }
 
   private async refineImage2(ownerId: string, dto: CreateImage2Dto) {
-    // Step 1: Validate refine input (projectId + imageId + feedback + key facts)
+    // Step 1: Validate refine input (projectId + feedback + key facts)
     if (!dto.projectId) {
       throw new BadRequestException('projectId is required for refine mode');
     }
-    if (!dto.imageId) {
-      throw new BadRequestException('imageId is required for refine mode');
-    }
     const projectId = dto.projectId;
-    const imageId = dto.imageId;
 
     const keyFacts = [dto.keyFact1, dto.keyFact2, dto.keyFact3, dto.keyFact4];
     const key = this.imageShared.requireIdempotencyKey(dto.idempotencyKey);
@@ -573,7 +609,6 @@ export class ProjectsImageService {
       {
         ownerId,
         projectId,
-        imageId,
         style: dto.style ?? null,
         feedback: dto.feedback,
         keyFacts,
@@ -604,32 +639,20 @@ export class ProjectsImageService {
     );
 
     // Step 2: Verify project ownership and fetch DB context
-    const project = await this.prisma.project.findFirst({
-      where: { id: projectId, ownerId },
-      select: {
-        id: true,
-        name: true,
-        brandName: true,
-        productCategory: true,
-        targetMarketplace: true,
-        status: true,
-        mainImage: true,
-        sku: true,
-        shortDescription: true,
-        brandFontHeading: true,
-        brandFontSubheading: true,
-      },
-    });
-    if (!project) {
-      throw new NotFoundException('Project not found');
-    }
+    const project = await this.imageShared.getOwnedProjectContext(
+      projectId,
+      ownerId,
+    );
 
     const image2Source = await this.prisma.image2.findFirst({
-      where: { id: imageId, projectId },
+      where: { projectId },
+      orderBy: [{ versionNumber: 'desc' }, { createdAt: 'desc' }],
       select: { id: true, imageUrl: true },
     });
     if (!image2Source) {
-      throw new NotFoundException('Image 2 not found');
+      throw new NotFoundException(
+        'No generated Image 2 found for this project to refine',
+      );
     }
     const projectContextPayload = project as unknown as Record<string, unknown>;
 
@@ -717,6 +740,17 @@ export class ProjectsImageService {
       throw error;
     }
 
+    await this.createOptimizationAudit({
+      projectId,
+      slot: ImageSlotType.KEY_FACTS,
+      action: OptimizationAction.REFINE,
+      imageRecordId: image2.id,
+      versionNumber: image2.versionNumber,
+      prompt: image2.generatedPrompt,
+      refinePrompt: image2.refinePrompt,
+      imageUrl: image2.imageUrl,
+    });
+
     return sendResponse('Image 2 refined successfully', {
       image2,
       aiMeta: {
@@ -781,29 +815,10 @@ export class ProjectsImageService {
     );
 
     // Step 2: Load project and ensure ownership
-    const project = await this.prisma.project.findFirst({
-      where: {
-        id: projectId,
-        ownerId,
-      },
-      select: {
-        id: true,
-        name: true,
-        brandName: true,
-        productCategory: true,
-        targetMarketplace: true,
-        status: true,
-        mainImage: true,
-        sku: true,
-        shortDescription: true,
-        brandFontHeading: true,
-        brandFontSubheading: true,
-      },
-    });
-
-    if (!project) {
-      throw new NotFoundException('Project not found');
-    }
+    const project = await this.imageShared.getOwnedProjectContext(
+      projectId,
+      ownerId,
+    );
 
     // Step 3: Upload lifestyle reference image to S3
     const uploadedRefImage = await this.s3.uploadBuffer({
@@ -820,6 +835,10 @@ export class ProjectsImageService {
       scenario: dto.scenario,
       refImageUrl: uploadedRefImage.url,
     });
+    console.log(
+      '🚀 ~ ProjectsImageService ~ generateImage3 ~ aiResult:',
+      aiResult,
+    );
 
     // Step 5: Resolve generated output URL (AI URL or AI binary -> S3)
     const generatedImageUrl = await this.imageShared.resolveGeneratedImageUrl(
@@ -883,6 +902,17 @@ export class ProjectsImageService {
       throw error;
     }
 
+    await this.createOptimizationAudit({
+      projectId,
+      slot: ImageSlotType.LIFESTYLE,
+      action: OptimizationAction.GENERATION,
+      imageRecordId: image3.id,
+      versionNumber: image3.versionNumber,
+      prompt: image3.generatedPrompt,
+      refinePrompt: image3.refinePrompt,
+      imageUrl: image3.imageUrl,
+    });
+
     return sendResponse('Image 3 generated successfully', {
       image3,
       aiMeta: {
@@ -893,18 +923,14 @@ export class ProjectsImageService {
   }
 
   private async refineImage3(ownerId: string, dto: CreateImage3Dto) {
-    // Step 1: Validate refine input (projectId + imageId + feedback)
+    // Step 1: Validate refine input (projectId + feedback)
     if (!dto.projectId) {
       throw new BadRequestException('projectId is required for refine mode');
-    }
-    if (!dto.imageId) {
-      throw new BadRequestException('imageId is required for refine mode');
     }
     if (!dto.feedback?.trim()) {
       throw new BadRequestException('feedback is required for refine mode');
     }
     const projectId = dto.projectId;
-    const imageId = dto.imageId;
 
     const key = this.imageShared.requireIdempotencyKey(dto.idempotencyKey);
     const idempotency = this.imageShared.buildGenerationId(
@@ -914,7 +940,6 @@ export class ProjectsImageService {
       {
         ownerId,
         projectId,
-        imageId,
         style: dto.style ?? null,
         feedback: dto.feedback,
         scenario: dto.scenario ?? null,
@@ -943,28 +968,14 @@ export class ProjectsImageService {
     );
 
     // Step 2: Verify project ownership and fetch DB context
-    const project = await this.prisma.project.findFirst({
-      where: { id: projectId, ownerId },
-      select: {
-        id: true,
-        name: true,
-        brandName: true,
-        productCategory: true,
-        targetMarketplace: true,
-        status: true,
-        mainImage: true,
-        sku: true,
-        shortDescription: true,
-        brandFontHeading: true,
-        brandFontSubheading: true,
-      },
-    });
-    if (!project) {
-      throw new NotFoundException('Project not found');
-    }
+    const project = await this.imageShared.getOwnedProjectContext(
+      projectId,
+      ownerId,
+    );
 
     const image3Source = await this.prisma.image3.findFirst({
-      where: { id: imageId, projectId },
+      where: { projectId },
+      orderBy: [{ versionNumber: 'desc' }, { createdAt: 'desc' }],
       select: {
         id: true,
         imageUrl: true,
@@ -973,7 +984,9 @@ export class ProjectsImageService {
       },
     });
     if (!image3Source) {
-      throw new NotFoundException('Image 3 not found');
+      throw new NotFoundException(
+        'No generated Image 3 found for this project to refine',
+      );
     }
     const sourceRefImageUrl =
       image3Source.imageUrl ||
@@ -992,6 +1005,10 @@ export class ProjectsImageService {
       scenario: dto.scenario,
       refImageUrl: sourceRefImageUrl,
     });
+    console.log(
+      '🚀 ~ ProjectsImageService ~ refineImage3 ~ aiResult:',
+      aiResult,
+    );
 
     // Step 4: Resolve generated output URL
     const generatedImageUrl = await this.imageShared.resolveGeneratedImageUrl(
@@ -1062,6 +1079,17 @@ export class ProjectsImageService {
       }
       throw error;
     }
+
+    await this.createOptimizationAudit({
+      projectId,
+      slot: ImageSlotType.LIFESTYLE,
+      action: OptimizationAction.REFINE,
+      imageRecordId: image3.id,
+      versionNumber: image3.versionNumber,
+      prompt: image3.generatedPrompt,
+      refinePrompt: image3.refinePrompt,
+      imageUrl: image3.imageUrl,
+    });
 
     return sendResponse('Image 3 refined successfully', {
       image3,

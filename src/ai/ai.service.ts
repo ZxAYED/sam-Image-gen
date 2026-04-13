@@ -1,6 +1,7 @@
 import {
   BadGatewayException,
   Injectable,
+  Logger,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -123,7 +124,9 @@ type GenerateImageResult = {
 
 @Injectable()
 export class AiService {
-  constructor(private readonly config: ConfigService) {}
+  private readonly logger = new Logger(AiService.name);
+
+  constructor(private readonly config: ConfigService) { }
 
   private pickString(
     body: Record<string, unknown>,
@@ -189,6 +192,12 @@ export class AiService {
     }
   }
 
+  private toJsonObject(
+    payload: Record<string, unknown>,
+  ): Record<string, unknown> {
+    return JSON.parse(JSON.stringify(payload)) as Record<string, unknown>;
+  }
+
   private async requestImageGeneration(
     path: string,
     requestBody: Record<string, unknown>,
@@ -199,6 +208,10 @@ export class AiService {
     }
 
     const endpoint = new URL(path, aiBaseUrl).toString();
+    const jsonRequestBody = this.toJsonObject(requestBody);
+    this.logger.log(
+      `AI request -> path=${path}, endpoint=${endpoint}, keys=${Object.keys(jsonRequestBody).join(',')}`,
+    );
     let response: Awaited<ReturnType<typeof fetch>>;
 
     try {
@@ -208,10 +221,15 @@ export class AiService {
           accept: 'application/json, image/*, application/octet-stream',
           'content-type': 'application/json',
         },
-        body: JSON.stringify(requestBody),
+        body: JSON.stringify(jsonRequestBody),
       });
     } catch (error) {
-      console.error('AI image service network error:', error);
+      console.log('🚀 ~ AiService ~ requestImageGeneration ~ error:', error);
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(
+        `AI network error -> path=${path}, endpoint=${endpoint}, message=${message}`,
+        error instanceof Error ? error.stack : undefined,
+      );
       throw new ServiceUnavailableException('AI image service is unavailable');
     }
 
@@ -223,6 +241,10 @@ export class AiService {
       response.headers.get('x-generated-prompt') ?? undefined;
     const statusHeader = response.headers.get('x-status') ?? undefined;
 
+    console.log(
+      '🚀 ~ AiService ~ requestImageGeneration ~ response:',
+      response,
+    );
     if (!response.ok) {
       let errorMessage = 'AI service failed to generate image';
       if (contentType.includes('application/json')) {
@@ -240,9 +262,20 @@ export class AiService {
             errorMessage = maybeError;
           }
         }
+      } else {
+        const rawError = await response.text().catch(() => '');
+        if (rawError) {
+          errorMessage = rawError.slice(0, 500);
+        }
       }
+      this.logger.error(
+        `AI response error -> path=${path}, status=${response.status}, contentType=${contentType}, message=${errorMessage}`,
+      );
       throw new BadGatewayException(errorMessage);
     }
+    this.logger.log(
+      `AI response ok -> path=${path}, status=${response.status}, contentType=${contentType}`,
+    );
 
     if (
       contentType.startsWith('image/') ||
@@ -278,18 +311,19 @@ export class AiService {
         ? (payload as Record<string, unknown>)
         : {};
 
-    const explicitError = this.pickString(body, ['error', 'detail', 'message']);
-    if (explicitError) {
-      throw new BadGatewayException(explicitError);
-    }
-
-    const imageUrl = this.pickString(body, [
+    const rawImageUrl = this.pickString(body, [
       'image_url',
       'imageUrl',
       'result_image_url',
       'generated_image_url',
       'output_url',
     ]);
+    const imageUrl =
+      rawImageUrl && !rawImageUrl.startsWith('data:') ? rawImageUrl : undefined;
+    const decodedImageFromUrl =
+      rawImageUrl && rawImageUrl.startsWith('data:')
+        ? this.decodeBase64Image(rawImageUrl)
+        : null;
 
     const encodedImage = this.pickString(body, [
       'image_base64',
@@ -297,9 +331,10 @@ export class AiService {
       'generated_image_base64',
       'output_image_base64',
     ]);
-    const decodedImage = encodedImage
+    const decodedImageFromField = encodedImage
       ? this.decodeBase64Image(encodedImage)
       : null;
+    const decodedImage = decodedImageFromField ?? decodedImageFromUrl;
 
     const prompt = this.pickPrompt(body);
     const refinePrompt = this.pickString(body, ['refine_prompt']);
@@ -307,7 +342,18 @@ export class AiService {
     const jobId = this.pickString(body, ['job_id', 'jobId']) ?? jobIdHeader;
 
     if (!imageUrl && !decodedImage) {
+      const explicitError = this.pickString(body, [
+        'error',
+        'detail',
+        'message',
+      ]);
+      if (explicitError) {
+        throw new BadGatewayException(explicitError);
+      }
       if (jobId || status) {
+        this.logger.warn(
+          `AI pending -> path=${path}, jobId=${jobId ?? 'n/a'}, status=${status ?? 'n/a'}`,
+        );
         return {
           imageFileName,
           prompt,
@@ -322,6 +368,9 @@ export class AiService {
       );
     }
 
+    this.logger.log(
+      `AI parsed output -> path=${path}, imageUrl=${Boolean(imageUrl)}, imageBuffer=${Boolean(decodedImage?.buffer)}, jobId=${jobId ?? 'n/a'}`,
+    );
     return {
       imageUrl,
       imageBuffer: decodedImage?.buffer,
@@ -338,27 +387,31 @@ export class AiService {
   async generateImage1(
     input: GenerateImage1Input,
   ): Promise<GenerateImageResult> {
+    this.logger.log(
+      `generateImage1 called -> hasProject=${Boolean(input.project)}, hasImageUrl=${Boolean(input.imageUrl)}`,
+    );
     const path =
       this.config.get<string>('AI_IMAGE1_GENERATE_PATH') ??
       '/api/step4/generate/main-product';
 
     return this.requestImageGeneration(path, {
-      project_context: input.project,
-      style_template: input.style ?? null,
-      image_url: input.imageUrl,
+      project: input.project,
+      style: input.style,
+      imageUrl: input.imageUrl,
     });
   }
 
   async refineImage1(input: RefineImage1Input): Promise<GenerateImageResult> {
+    console.log('🚀 ~ AiService ~ refineImage1 ~ input:', input);
     const path =
       this.config.get<string>('AI_IMAGE1_REFINE_PATH') ??
       '/api/step4/refine/main-product';
-
+    console.log('🚀 ~ AiService ~ refineImage1 ~ input:', input);
     return this.requestImageGeneration(path, {
-      project_context: input.projectContext,
-      style_template: input.style ?? null,
+      project: input.projectContext,
+      style: input.style,
       feedback: input.feedback,
-      image_url: input.imageUrl,
+      imageUrl: input.imageUrl,
     });
   }
 
@@ -368,14 +421,14 @@ export class AiService {
     const path =
       this.config.get<string>('AI_IMAGE2_GENERATE_PATH') ??
       '/api/step4/generate/key-facts';
-
+    console.log('🚀 ~ AiService ~ gen2 ~ input:', input);
     return this.requestImageGeneration(path, {
-      project_context: input.project,
-      style_template: input.style ?? null,
-      key_facts: input.keyFacts,
-      background_style: input.backgroundStyle ?? null,
-      logo_position: input.logoPosition ?? null,
-      image_url: input.imageUrl ?? null,
+      project: input.project,
+      style: input.style,
+      keyFacts: input.keyFacts,
+      backgroundStyle: input.backgroundStyle,
+      logoPosition: input.logoPosition,
+      imageUrl: input.imageUrl,
     });
   }
 
@@ -383,15 +436,15 @@ export class AiService {
     const path =
       this.config.get<string>('AI_IMAGE2_REFINE_PATH') ??
       '/api/step4/refine/key-facts';
-
+    console.log('🚀 ~ AiService ~ refineImage2 ~ input:', input);
     return this.requestImageGeneration(path, {
-      project_context: input.projectContext,
-      style_template: input.style ?? null,
+      projectContext: input.projectContext,
+      style: input.style,
       feedback: input.feedback,
-      key_facts: input.keyFacts,
-      background_style: input.backgroundStyle ?? null,
-      logo_position: input.logoPosition ?? null,
-      image_url: input.imageUrl ?? null,
+      keyFacts: input.keyFacts,
+      backgroundStyle: input.backgroundStyle,
+      logoPosition: input.logoPosition,
+      imageUrl: input.imageUrl,
     });
   }
 
@@ -401,12 +454,12 @@ export class AiService {
     const path =
       this.config.get<string>('AI_IMAGE3_GENERATE_PATH') ??
       '/api/step4/generate/lifestyle';
-
+    console.log('🚀 ~ AiService ~ generateImage3 ~ input:', input);
     return this.requestImageGeneration(path, {
-      project_context: input.project,
-      style_template: input.style ?? null,
-      scenario: input.scenario ?? null,
-      ref_image_url: input.refImageUrl,
+      project: input.project,
+      style: input.style,
+      scenario: input.scenario,
+      refImageUrl: input.refImageUrl,
     });
   }
 
@@ -414,13 +467,13 @@ export class AiService {
     const path =
       this.config.get<string>('AI_IMAGE3_REFINE_PATH') ??
       '/api/step4/refine/lifestyle';
-
+    console.log('🚀 ~ AiService ~ refineImage3 ~ input:', input);
     return this.requestImageGeneration(path, {
-      project_context: input.projectContext,
-      style_template: input.style ?? null,
+      projectContext: input.projectContext,
+      style: input.style,
       feedback: input.feedback,
-      scenario: input.scenario ?? null,
-      ref_image_url: input.refImageUrl,
+      scenario: input.scenario,
+      refImageUrl: input.refImageUrl,
     });
   }
 
@@ -430,10 +483,13 @@ export class AiService {
     const path =
       this.config.get<string>('AI_IMAGE4_GENERATE_PATH') ??
       '/api/step4/generate/usps';
-
+    console.log('AI generateImage4 input:', input);
     return this.requestImageGeneration(path, {
+      project: input.projectContext,
+      projectContext: input.projectContext,
       project_context: input.projectContext,
-      style_template: input.style ?? null,
+      style: input.style,
+      // style_template: input.style,
       usps: input.usps,
     });
   }
@@ -442,10 +498,18 @@ export class AiService {
     const path =
       this.config.get<string>('AI_IMAGE4_REFINE_PATH') ??
       '/api/step4/refine/usps';
+    console.log('AI refineImage4 input:', input);
 
     return this.requestImageGeneration(path, {
-      project_context: input.projectContext,
-      style_template: input.style ?? null,
+      // project: input.projectContext,
+      projectContext: input.projectContext,
+      // project_context: input.projectContext,
+      // project_id:
+      //   typeof input.projectContext.id === 'string'
+      //     ? input.projectContext.id
+      //     : undefined,
+      style: input.style,
+      // style_template: input.style,
       feedback: input.feedback,
       usps: input.usps,
     });
@@ -457,10 +521,10 @@ export class AiService {
     const path =
       this.config.get<string>('AI_IMAGE5_GENERATE_PATH') ??
       '/api/step4/generate/comparison';
-
+    console.log('🚀 ~ AiService ~ generateImage5 ~ input:', input);
     return this.requestImageGeneration(path, {
-      project_context: input.projectContext,
-      style_template: input.style ?? null,
+      style: input.style,
+      projectContext: input.projectContext,
       advantages: input.advantages,
       limitations: input.limitations,
     });
@@ -470,10 +534,11 @@ export class AiService {
     const path =
       this.config.get<string>('AI_IMAGE5_REFINE_PATH') ??
       '/api/step4/refine/comparison';
+    console.log('🚀 ~ AiService ~ refineImage5 ~ input:', input);
 
     return this.requestImageGeneration(path, {
-      project_context: input.projectContext,
-      style_template: input.style ?? null,
+      style: input.style,
+      projectContext: input.projectContext,
       feedback: input.feedback,
       advantages: input.advantages,
       limitations: input.limitations,
@@ -486,10 +551,15 @@ export class AiService {
     const path =
       this.config.get<string>('AI_IMAGE6_GENERATE_PATH') ??
       '/api/step4/generate/cross-selling';
-
+    console.log('🚀 ~ AiService ~ generateImage6 ~ input:', input);
     return this.requestImageGeneration(path, {
+      project: input.projectContext,
+      projectContext: input.projectContext,
       project_context: input.projectContext,
-      style_template: input.style ?? null,
+
+      style: input.style,
+      style_template: input.style,
+      productNames: input.productNames,
       product_names: input.productNames,
     });
   }
@@ -498,11 +568,17 @@ export class AiService {
     const path =
       this.config.get<string>('AI_IMAGE6_REFINE_PATH') ??
       '/api/step4/refine/cross-selling';
+    console.log('🚀 ~ AiService ~ refineImage6 ~ input:', input);
 
     return this.requestImageGeneration(path, {
+      project: input.projectContext,
+      projectContext: input.projectContext,
       project_context: input.projectContext,
-      style_template: input.style ?? null,
+
+      style: input.style,
+      style_template: input.style,
       feedback: input.feedback,
+      productNames: input.productNames,
       product_names: input.productNames,
     });
   }
@@ -513,10 +589,14 @@ export class AiService {
     const path =
       this.config.get<string>('AI_IMAGE7_GENERATE_PATH') ??
       '/api/step4/generate/closing';
-
+    console.log('🚀 ~ AiService ~ generateImage7 ~ input:', input);
     return this.requestImageGeneration(path, {
+      project: input.projectContext,
+      projectContext: input.projectContext,
       project_context: input.projectContext,
-      style_template: input.style ?? null,
+
+      style: input.style,
+      style_template: input.style,
       direction: input.direction,
       headline: input.headline,
     });
@@ -526,10 +606,15 @@ export class AiService {
     const path =
       this.config.get<string>('AI_IMAGE7_REFINE_PATH') ??
       '/api/step4/refine/closing';
+    console.log('🚀 ~ AiService ~ refineImage7 ~ input:', input);
 
     return this.requestImageGeneration(path, {
+      project: input.projectContext,
+      projectContext: input.projectContext,
       project_context: input.projectContext,
-      style_template: input.style ?? null,
+
+      style: input.style,
+      style_template: input.style,
       feedback: input.feedback,
       direction: input.direction,
       headline: input.headline,
