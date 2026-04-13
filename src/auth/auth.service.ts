@@ -4,24 +4,46 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
-import { sendResponse } from 'src/utils/sendResponse';
+import type { StringValue } from 'ms';
 import { PrismaService } from '../prisma/prisma.service';
+import { LoginDto } from './dto/login.dto';
+import { SignupDto } from './dto/signup.dto';
+
+type AuthResult = {
+  user: {
+    id: string;
+    email: string;
+    firstName: string;
+    lastName: string;
+    createdAt: Date;
+  };
+  accessToken: string;
+  refreshToken?: string;
+};
+
+type TokenPayload = {
+  id?: string;
+  email?: string;
+  tokenType?: 'refresh' | 'access';
+  [key: string]: unknown;
+};
+
+type AccessTokenResult = {
+  accessToken: string;
+};
 
 @Injectable()
 export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
+    private readonly config: ConfigService,
   ) {}
 
-  async signup(params: {
-    email: string;
-    password: string;
-    firstName: string;
-    lastName: string;
-  }) {
+  async signup(params: SignupDto): Promise<AuthResult> {
     const existing = await this.prisma.user.findUnique({
       where: { email: params.email },
     });
@@ -48,16 +70,10 @@ export class AuthService {
       },
     });
 
-    return sendResponse('Signup successful', {
-      user,
-      accessToken: await this.signAccessToken({
-        id: user.id,
-        email: user.email,
-      }),
-    });
+    return this.buildAuthResult(user as AuthResult['user']);
   }
 
-  async login(params: { email: string; password: string }) {
+  async login(params: LoginDto): Promise<AuthResult> {
     const user = await this.prisma.user.findUnique({
       where: { email: params.email },
     });
@@ -75,13 +91,50 @@ export class AuthService {
       createdAt: user.createdAt,
     };
 
-    return sendResponse('Login successful', {
-      user: safeUser,
+    return this.buildAuthResult(safeUser as AuthResult['user']);
+  }
+
+  async refreshToken(refreshToken: string): Promise<AccessTokenResult> {
+    const payload = await this.verifyRefreshToken(refreshToken);
+    const userId = payload.id;
+    const email = payload.email;
+
+    if (!userId || !email) {
+      throw new UnauthorizedException('Need to login again');
+    }
+
+    const existingUser = await this.prisma.user.findUnique({
+      where: { id: userId, email },
+      select: { id: true },
+    });
+
+    if (!existingUser) {
+      throw new UnauthorizedException('Need to login again');
+    }
+
+    return {
+      accessToken: await this.signAccessToken({ id: userId, email }),
+    };
+  }
+
+  private async buildAuthResult(user: {
+    id: string;
+    email: string;
+    firstName: string;
+    lastName: string;
+    createdAt: Date;
+  }): Promise<AuthResult> {
+    return {
+      user,
       accessToken: await this.signAccessToken({
         id: user.id,
         email: user.email,
       }),
-    });
+      refreshToken: await this.signRefreshToken({
+        id: user.id,
+        email: user.email,
+      }),
+    };
   }
 
   private async signAccessToken(user: { id: string; email: string }) {
@@ -89,5 +142,53 @@ export class AuthService {
       id: user.id,
       email: user.email,
     });
+  }
+
+  private async signRefreshToken(user: { id: string; email: string }) {
+    const secret =
+      this.config.get<string>('JWT_REFRESH_SECRET') ??
+      this.config.get<string>('JWT_SECRET');
+
+    if (!secret) {
+      throw new UnauthorizedException('JWT secret is not configured');
+    }
+
+    return this.jwt.signAsync(
+      {
+        id: user.id,
+        email: user.email,
+        tokenType: 'refresh',
+      },
+      {
+        secret,
+        expiresIn: (this.config.get<string>('JWT_REFRESH_EXPIRES_IN') ??
+          '7d') as StringValue,
+      },
+    );
+  }
+
+  private async verifyRefreshToken(token: string): Promise<TokenPayload> {
+    const secret =
+      this.config.get<string>('JWT_REFRESH_SECRET') ??
+      this.config.get<string>('JWT_SECRET');
+
+    if (!secret) {
+      throw new UnauthorizedException('JWT secret is not configured');
+    }
+
+    let payload: TokenPayload;
+    try {
+      payload = await this.jwt.verifyAsync<TokenPayload>(token, {
+        secret,
+      });
+    } catch {
+      throw new UnauthorizedException('Need to login again');
+    }
+
+    if (payload.tokenType !== 'refresh') {
+      throw new UnauthorizedException('Need to login again');
+    }
+
+    return payload;
   }
 }
